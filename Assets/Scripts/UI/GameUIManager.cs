@@ -17,6 +17,12 @@ public class GameUIManager : MonoBehaviour
     public Button completeButton;
     public Button backButton;
 
+    public RectTransform toolbarPanelRect;
+    public Button fillToolBtn;
+    public Button brushToolBtn;
+    public GameObject brushSettingsPanel;
+    public UnityEngine.UI.Slider brushSizeSlider;
+
     [Header("References")]
     public PaintController paintController;
 
@@ -36,6 +42,49 @@ public class GameUIManager : MonoBehaviour
 
         if (backButton != null)
             backButton.onClick.AddListener(OnBackClicked);
+
+        if (fillToolBtn != null)
+            fillToolBtn.onClick.AddListener(() => SetTool(PaintTool.Fill));
+
+        if (brushToolBtn != null)
+            brushToolBtn.onClick.AddListener(() => SetTool(PaintTool.Brush));
+
+        if (brushSizeSlider != null && paintController != null)
+        {
+            brushSizeSlider.value = paintController.brushRadius;
+            brushSizeSlider.onValueChanged.AddListener(paintController.SetBrushRadius);
+        }
+
+        // Default tool UI state
+        UpdateToolUI(PaintTool.Fill);
+    }
+
+    void SetTool(PaintTool tool)
+    {
+        if (paintController != null)
+        {
+            paintController.SetTool(tool);
+            UpdateToolUI(tool);
+        }
+    }
+
+    void UpdateToolUI(PaintTool activeTool)
+    {
+        if (fillToolBtn != null)
+            fillToolBtn.GetComponent<Image>().color = (activeTool == PaintTool.Fill) ? Color.white : new Color(0.6f, 0.6f, 0.6f);
+
+        if (brushToolBtn != null)
+            brushToolBtn.GetComponent<Image>().color = (activeTool == PaintTool.Brush) ? Color.white : new Color(0.6f, 0.6f, 0.6f);
+
+        if (brushSettingsPanel != null)
+            brushSettingsPanel.SetActive(activeTool == PaintTool.Brush);
+
+        if (toolbarPanelRect != null)
+        {
+            // If Brush is selected, height is 320 to show slider. If Fill, height is 150 for buttons only.
+            float targetHeight = (activeTool == PaintTool.Brush) ? 320f : 160f;
+            toolbarPanelRect.sizeDelta = new Vector2(toolbarPanelRect.sizeDelta.x, targetHeight);
+        }
     }
 
     // Called from PaintController — kept signature for compatibility

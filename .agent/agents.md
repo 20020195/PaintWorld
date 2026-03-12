@@ -11,14 +11,14 @@
 Dự án vận hành qua 3 Scene chính, cần được load thông qua `SceneManager` theo chuẩn thứ tự trong Build Settings:
 - **`MainMenu` (Scene 0):** Màn hình chờ → Nút "Bắt đầu chơi" gọi `SceneManager.LoadScene("PictureSelect")`.
 - **`PictureSelect` (Scene 1):** Màn hình Carousel chọn tranh. Khi người chơi click vào một bức tranh `PictureCarousel` sẽ lưu thông tin tranh vào **`GameData`** và chuyển sang `PaintScene`.
-- **`PaintScene` (Scene 2):** Màn hình tô màu chính. Đọc ảnh từ `GameData`. Nếu người chơi ấn "← Trở về", nó gọi `SceneManager.LoadScene("PictureSelect")`.
+- **`PaintScene` (Scene 2):** Màn hình tô màu chính. Đọc ảnh từ `GameData`. Hỗ trợ 2 lớp vẽ (Outline phía trên, ColorLayer phía dưới).
 
 ### 2. Các Script Quan Trọng (Core Scripts)
 
 #### Data & Quản lý Scene
 - **`GameData.cs`**: `static class` đóng vai trò là Data Bus truyền dữ liệu (Sprite, Total Regions, Tên Tranh) giữa `PictureSelect` và `PaintScene`. Tuyệt đối không xóa hay thay đổi cơ chế truyền static này nếu không có class quản lý State thay thế.
 - **`MainMenuManager.cs`**: Xử lý logic cơ bản của màn hình Menu (Bắt đầu, Thoát).
-- **`GameUIManager.cs`**: Quản lý UI On-screen của `PaintScene` (nút Trở về, Hủy bước, Hoàn thành, Màn hình Win).
+- **`GameUIManager.cs`**: Quản lý UI On-screen của `PaintScene` (nút Trở về, Hủy bước, Hoàn thành, Màn hình Win). Điều khiển thu phóng thanh Toolbar bên trái khi chọn Brush/Fill.
 
 #### Picture Selection (Carousel)
 - **`PictureCarousel.cs`**: Xử lý logic vuốt/scroll ngang, tự động snap (hút) về bức tranh gần nhất.
@@ -26,9 +26,10 @@ Dự án vận hành qua 3 Scene chính, cần được load thông qua `SceneMa
 - **`PictureCard.cs`**: Chứa data của từng bức tranh (Sprite, Name) và xử lý hiệu ứng Scale/Alpha khi tranh đó nằm ở giữa hay bị cuộn ra rìa.
 
 #### Paint Logic (Cốt lõi)
-- **`PaintController.cs`**: Xử lý toàn bộ logic Flood Fill.
-  - Sử dụng mảng Pixel (`Color32[]`) để tính toán nhòe màu và tạo Texture mới.
-  - Hỗ trợ **Multiply Blending** (Hòa trộn với độ sáng của pixel đen gốc) thay vì Solid Color để các nét viền không bị "nhem" (Artifacts/Halos).
+- **`PaintController.cs`**: Xử lý toàn bộ logic Flood Fill và Brush (Cọ vẽ).
+  - **Cơ chế 2 Layer**: Lớp trên cùng (`SpriteRenderer` chính) là ảnh Outline đã xử lý trong suốt các vùng trắng. Lớp dưới cùng (`ColorLayer`) là `Texture2D` trắng để tô màu. Việc tô màu diễn ra ở lớp dưới, giúp không bao giờ bị lem đè lên viền đen.
+  - **Flood Fill**: Tô màu đặc (Solid) vào lớp dưới.
+  - **Brush**: Vẽ tự do bằng cách click-drag. Sử dụng nội suy (Interpolation) để nối các điểm khi chuột di chuyển nhanh.
   - Có tích hợp Stack giữ lại trạng thái (10 bước gần nhất) để hỗ trợ **Undo**.
 - **`RGBColorPicker.cs`**: Màn hình Popup cho phép người chơi pha màu RGB tùy chỉnh.
 - **`ColorPaletteUI.cs`**: Thanh màu Preset bên dưới, chứa nút `+` gọi `RGBColorPicker`.
@@ -40,6 +41,14 @@ Sử dụng các Tool Scripts nằm trong thư mục `Editor/` để tự độn
 - **`PictureSelectSetup.cs`**: Sinh tự động Scene PictureSelect.
 - **`PaintSceneSetup.cs`**: Sinh tự động Scene PaintScene.
 *Luôn ưu tiên chạy các Editor tool này khi bị hỏng Scene hoặc UI thay vì cố manual add Component lại.*
+
+### 3. Cấu trúc Thư mục (Directory Structure)
+Các script được phân loại trong `Assets/Scripts/`:
+- **`Controller/`**: `PaintController`, `CameraZoomPan`.
+- **`UI/`**: `GameUIManager`, `ColorPaletteUI`, `RGBColorPicker`, `MainMenuManager`.
+- **`Gallery/`**: `PictureCarousel`, `PictureCard`, `CarouselDragProxy`.
+- **`Data/`**: `GameData`.
+- **`Editor/`**: Các script setup scene.
 
 ---
 
@@ -55,11 +64,11 @@ Sử dụng các Tool Scripts nằm trong thư mục `Editor/` để tự độn
 3. **Tối ưu hóa Thuật Toán Flood Fill:**
    - Dùng vòng lặp Stack (khử đệ quy) để tránh StackOverflow.
    - Để tránh "răng cưa / nhem viền lốm đốm", phải kiểm tra biên và dung sai (tolerance) rộng `fillTolerance = 0.8`.
-   - Lưu trữ pixel ảnh gốc `originalPixels`. Khi chạy Flood Fill, lấy màu fill nhân với độ sáng gốc thay vì đè thành khối màu đặc.
+   - **Hệ thống 2 Layer**: Đổ màu đặc (Solid Color) trực tiếp vào lớp `ColorLayer` nằm dưới. Không còn dùng Multiply Blending vì lớp Outline trên cùng đã làm nhiệm vụ che phủ và khử nhiễu.
 
 4. **Quản lý Camera (Zoom & Pan):**
    - Orthographic Camera Scaling.
-   - Pan phải dùng Window delta (`Input.GetAxis("Mouse X")` nhân với tham chiếu `orthographicSize / ScreenHeight`) để tránh hiệu ứng phản hồi (feedback loop / jitter) khiến màn hình bị giật. KHÔNG dùng delta `ScreenToWorldPoint`.
+   - Pan phải dùng **Local Coordinate Delta** (tính toán dựa trên `transform.InverseTransformPoint` và vị trí chuột cũ) để tránh hiện tượng rung lắc (jitter) khi camera di chuyển độc lập với vật thể.
 
 5. **Lịch sử Undo:**
    - Chỉ lưu tối đa `MAX_UNDO_STEPS = 10` bằng cách lưu mảng `Color32[]`. Vượt mức sẽ tự động xóa phần tử mảng cũ nhất bằng `RemoveAt(0)` để tránh rò rỉ RAM (OOM).

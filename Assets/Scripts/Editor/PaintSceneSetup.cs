@@ -145,6 +145,52 @@ public class PaintSceneSetup : EditorWindow
         var pickerPanel = BuildRGBPickerPanel(canvasGO.transform, out var rgbPicker);
         paletteUI.rgbColorPicker = rgbPicker;
 
+        // ── Left Toolbar: Tools ────────────────────────────
+        var toolbarPanel = MakePanel("LeftToolbar", canvasGO.transform,
+            new Vector2(0, 0.5f), new Vector2(0, 0.5f),
+            new Vector2(80, 320), new Vector2(50, 0));
+        toolbarPanel.GetComponent<Image>().color = new Color(0.12f, 0.12f, 0.18f, 0.96f);
+
+        // Fill tool button
+        var fillToolBtn = MakeTextButton("FillToolButton", toolbarPanel.transform,
+            new Vector2(0.5f, 1), new Vector2(0.5f, 1),
+            new Vector2(0, -50), new Vector2(60, 60),
+            "🪣", new Color(0.2f, 0.2f, 0.3f), 24);
+
+        // Brush tool button
+        var brushToolBtn = MakeTextButton("BrushToolButton", toolbarPanel.transform,
+            new Vector2(0.5f, 1), new Vector2(0.5f, 1),
+            new Vector2(0, -120), new Vector2(60, 60),
+            "🖌️", new Color(0.2f, 0.2f, 0.3f), 24);
+
+        // Brush Settings Panel (Contains Slider)
+        var sliderContainer = new GameObject("BrushSettings");
+        sliderContainer.transform.SetParent(toolbarPanel.transform, false);
+        var scRT = sliderContainer.AddComponent<RectTransform>();
+        scRT.anchorMin = new Vector2(0.5f, 1);
+        scRT.anchorMax = new Vector2(0.5f, 1);
+        scRT.sizeDelta = new Vector2(60, 120);
+        scRT.anchoredPosition = new Vector2(0, -220);
+
+        DefaultControls.Resources uiRes = new DefaultControls.Resources();
+        uiRes.standard = Resources.GetBuiltinResource<Sprite>("UI/Skin/UISprite.psd");
+        uiRes.background = Resources.GetBuiltinResource<Sprite>("UI/Skin/Background.psd");
+        uiRes.knob = Resources.GetBuiltinResource<Sprite>("UI/Skin/Knob.psd");
+
+        var sliderGO = DefaultControls.CreateSlider(uiRes);
+        sliderGO.transform.SetParent(sliderContainer.transform, false);
+        var sRT = sliderGO.GetComponent<RectTransform>();
+        sRT.anchorMin = new Vector2(0.5f, 0.5f);
+        sRT.anchorMax = new Vector2(0.5f, 0.5f);
+        sRT.sizeDelta = new Vector2(100, 20); // 100 length
+        sRT.anchoredPosition = Vector2.zero;
+        sRT.localEulerAngles = new Vector3(0, 0, 90f); // Rotate vertical
+        
+        var brushSlider = sliderGO.GetComponent<Slider>();
+        brushSlider.minValue = 5;
+        brushSlider.maxValue = 50;
+        brushSlider.value = 15;
+
         // ── Win Panel ────────────────────────────────────────────
         var winPanel = MakePanel("WinPanel", canvasGO.transform,
             new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
@@ -176,6 +222,11 @@ public class PaintSceneSetup : EditorWindow
         uiMgr.undoButton      = undoBtn.GetComponent<Button>();
         uiMgr.completeButton  = completeBtn.GetComponent<Button>();
         uiMgr.backButton      = backBtn.GetComponent<Button>();
+        uiMgr.toolbarPanelRect = toolbarPanel.GetComponent<RectTransform>();
+        uiMgr.fillToolBtn     = fillToolBtn.GetComponent<Button>();
+        uiMgr.brushToolBtn    = brushToolBtn.GetComponent<Button>();
+        uiMgr.brushSettingsPanel = sliderContainer;
+        uiMgr.brushSizeSlider = brushSlider;
         uiMgr.paintController = paintController;
         paintController.uiManager = uiMgr;
 
