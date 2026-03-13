@@ -27,13 +27,17 @@ Dự án vận hành qua 3 Scene chính, cần được load thông qua `SceneMa
 
 #### Paint Logic (Cốt lõi)
 - **`PaintController.cs`**: Xử lý toàn bộ logic Flood Fill và Brush (Cọ vẽ).
-  - **Cơ chế 2 Layer**: Lớp trên cùng (`SpriteRenderer` chính) là ảnh Outline đã xử lý trong suốt các vùng trắng. Lớp dưới cùng (`ColorLayer`) là `Texture2D` trắng để tô màu. Việc tô màu diễn ra ở lớp dưới, giúp không bao giờ bị lem đè lên viền đen.
+  - **Cơ chế 2 Layer**: Lớp trên cùng (`SpriteRenderer` chính) là ảnh Outline đã xử lý trong suốt các vùng trắng. Lớp dưới cùng (`ColorLayer`) là `Texture2D` trắng để tô màu.
   - **Flood Fill**: Tô màu đặc (Solid) vào lớp dưới.
   - **Brush**: Vẽ tự do bằng cách click-drag. Sử dụng nội suy (Interpolation) để nối các điểm khi chuột di chuyển nhanh.
-  - Có tích hợp Stack giữ lại trạng thái (10 bước gần nhất) để hỗ trợ **Undo**.
+  - **Undo (Diff-based)**: Lưu cấu trúc `PixelDiff[] {idx, oldColor}` thay vì snapshot toàn bộ `Color32[]`. Tiết kiệm **10-50x** bộ nhớ cho mobile.
+  - **Mobile input**: `Input.simulateMouseWithTouches = false` trên mobile. Toàn bộ touch painting xử lý trong `Update()` qua `HandleTouchPainting()` thay vì `OnMouseDown`. UI blocking dùng `EventSystem.RaycastAll()` (không phải `IsPointerOverGameObject`) vì đáng tin cậy hơn trên mobile.
 - **`RGBColorPicker.cs`**: Màn hình Popup cho phép người chơi pha màu RGB tùy chỉnh.
 - **`ColorPaletteUI.cs`**: Thanh màu Preset bên dưới, chứa nút `+` gọi `RGBColorPicker`.
-- **`CameraZoomPan.cs`**: Điều khiển Camera Orthographic trong `PaintScene`. Hỗ trợ cuộn chuột để zoom thẳng vào vị trí con trỏ (Zoom to Point) và kéo chuột (chuột giữa/chuột phải) để Pan. *Sử dụng Screen Space Delta để tránh bị giật.*
+- **`CameraZoomPan.cs`**: Điều khiển Camera Orthographic trong `PaintScene`.
+  - **PC**: Scroll wheel để zoom, chuột giữa/phải để pan.
+  - **Mobile**: Pinch 2 ngón để zoom, kéo 1 ngón để pan. 1-finger pan bị tắt khi `PaintController.IsBrushActive == true` (tránh camera dịch chuyển khi đang vẽ).
+  - Dùng `#if UNITY_EDITOR || UNITY_STANDALONE` để biên dịch đúng input code theo platform.
 
 #### Tự động hóa Editor (Window setup)
 Sử dụng các Tool Scripts nằm trong thư mục `Editor/` để tự động hóa xây dựng UI (vì UI của Unity sinh ra rất phức tạp để AI tự tạo lại thủ công).
@@ -54,26 +58,35 @@ Các script được phân loại trong `Assets/Scripts/`:
 
 ## 📝 Quy tắc Lập Trình (Coding Rules & Best Practices)
 
-1. **Unity UI Event System:**
-   - Khi thiết kế UI chồng lên Game (ví dụ: RGB Picker nổi lên trên bức tranh), **Bắt buộc** phải sử dụng `EventSystem.current.IsPointerOverGameObject()` trong hàm click thực tế của World (như `OnMouseDown` của `PaintController` hay Raycast kéo Camera trong `CameraZoomPan`) để block Raycast xuyên thấu. Nếu không, bấm vào UI cũng làm bức tranh bị tô màu.
+1. **🚨 Luôn cân nhắc tối ưu cho Mobile:**
+   - Đây là game mắm nhàc (children) chạy trên điện thoại. Mọi thứ phải cân nhắc đến RAM và CPU hạn chế của thiết bị mobile.
+   - **Input**: Dùng `Input.simulateMouseWithTouches = false` và xử lý touch thủ công trong `Update()`. Không dựa vào `OnMouseDown` trên mobile.
+   - **UI Blocking**: Dùng `EventSystem.RaycastAll()` thay vì `IsPointerOverGameObject(fingerId)` vì chính xác hơn trên mobile.
+   - **Memory**: Ưu tiên cấu trúc diff/patch hơn là lưu full snapshot. Tránh các phép tính tốn kém mỗi frame nếu không cần thiết.
+   - **Platform detection**: Sử dụng `#if UNITY_EDITOR || UNITY_STANDALONE` để tách biệt logic PC và Mobile chứ không pha trộn.
 
-2. **Xử lý Texture (Texture Manipulation):**
+2. **Unity UI Event System:**
+   - Để tránh touch trên UI xâm nhập vào game world bín dưới do `simulateMouseWithTouches`, hãy dùng `EventSystem.RaycastAll()` tại `TouchPhase.Began` để phát hiện và blacklist touch ID đó.
+
+3. **Xử lý Texture (Texture Manipulation):**
    - Import ảnh nét viền (Outlines) với thuộc tính `isReadable = true` và `Format = RGBA 32 bit` (trong meta properties).
    - KHÔNG dùng `Graphics.CopyTexture` giữa Texture Import và Runtime Texture do khác biệt byte nén. LUÔN dùng `Texture2D.GetPixels32()` và `Texture2D.SetPixels32()`.
 
-3. **Tối ưu hóa Thuật Toán Flood Fill:**
+4. **Tối ưu hóa Thuật Toán Flood Fill:**
    - Dùng vòng lặp Stack (khử đệ quy) để tránh StackOverflow.
    - Để tránh "răng cưa / nhem viền lốm đốm", phải kiểm tra biên và dung sai (tolerance) rộng `fillTolerance = 0.8`.
    - **Hệ thống 2 Layer**: Đổ màu đặc (Solid Color) trực tiếp vào lớp `ColorLayer` nằm dưới. Không còn dùng Multiply Blending vì lớp Outline trên cùng đã làm nhiệm vụ che phủ và khử nhiễu.
 
-4. **Quản lý Camera (Zoom & Pan):**
+5. **Quản lý Camera (Zoom & Pan):**
    - Orthographic Camera Scaling.
    - Pan phải dùng **Local Coordinate Delta** (tính toán dựa trên `transform.InverseTransformPoint` và vị trí chuột cũ) để tránh hiện tượng rung lắc (jitter) khi camera di chuyển độc lập với vật thể.
 
-5. **Lịch sử Undo:**
-   - Chỉ lưu tối đa `MAX_UNDO_STEPS = 10` bằng cách lưu mảng `Color32[]`. Vượt mức sẽ tự động xóa phần tử mảng cũ nhất bằng `RemoveAt(0)` để tránh rò rỉ RAM (OOM).
+6. **Lịch sử Undo (Diff-based):**
+   - Lưu cấu trúc `PixelDiff[] {int idx, Color32 oldColor}` thay vì snapshot toàn bộ `Color32[]`. Tiết kiệm 10-50x bộ nhớ cho mobile.
+   - FloodFill trả về diff ngay trong quá trình fill. Brush lưu `strokeOriginals` (Dictionary pixel đầu tiên bị chạm) và commit 1 lần khi nhấc ngón tay.
+   - `maxUndoSteps` là `public` field có thể chỉnh sử a trong Inspector. Mặc định là 20.
 
-6. **Không tự động Win:**
+7. **Không tự động Win:**
    - Người chơi tô xong một vùng chỉ +1 vào Progress. Phải ấn nút **"Hoàn thành"** thủ công thì mới xác nhận thắng. (Cho phép tô lại, tô đè tùy thích).
 
 ---

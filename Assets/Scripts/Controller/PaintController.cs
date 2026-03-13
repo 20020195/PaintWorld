@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.UI;
 
 public enum PaintTool
 {
@@ -44,18 +45,30 @@ public class PaintController : MonoBehaviour
     private int paintedRegions = 0;
     private Color selectedColor = Color.blue;
     [Header("Drawing History")]
-    private List<Color32[]> undoStack = new List<Color32[]>();
-    private const int MAX_UNDO_STEPS = 10;
+    [Tooltip("Maximum number of undo steps. Higher = more RAM usage (especially for large images).")]
+    public int maxUndoSteps = 20;
+
+    // Diff-based undo: stores only the pixels that changed, not the full texture.
+    // Each UndoPatch = array of (pixelIndex, oldColor) — tiny for small strokes/fills.
+    private struct PixelDiff { public int idx; public Color32 oldColor; }
+    private List<PixelDiff[]> undoStack = new List<PixelDiff[]>();
     private bool isGameComplete = false;
 
-    // Brush tracking
+    // Brush tracking: accumulate diffs across a whole stroke
     private bool isDraggingBrush = false;
-    private Color32[] currentStrokeUndoState;
+    private Dictionary<int, Color32> strokeOriginals = new Dictionary<int, Color32>(); // idx → original color before this stroke
     private Vector2Int lastDragPos = new Vector2Int(-1, -1);
+
+    /// <summary>True while the user is actively drawing a brush stroke. 
+    /// CameraZoomPan reads this to block 1-finger pan during painting.</summary>
+    public static bool IsBrushActive { get; private set; }
 
     // For tracking which regions have been painted
     // We sample a point; if it was white and becomes colored, it's a new region
     private static readonly Color32 WHITE = new Color32(255, 255, 255, 255);
+
+    // Tracks which touch fingerIds started on a UI element — these must not paint the canvas.
+    private readonly HashSet<int> uiBlockedFingers = new HashSet<int>();
 
     void Awake()
     {
@@ -69,6 +82,81 @@ public class PaintController : MonoBehaviour
         }
 
         InitTexture();
+
+#if !UNITY_EDITOR && !UNITY_STANDALONE
+        // Disable this so OnMouseDown is NOT triggered by touches.
+        // We handle all touch input manually in Update() to control UI blocking order.
+        Input.simulateMouseWithTouches = false;
+#endif
+    }
+
+    void Update()
+    {
+#if !UNITY_EDITOR && !UNITY_STANDALONE
+        HandleTouchPainting();
+#endif
+    }
+
+    void HandleTouchPainting()
+    {
+        if (isGameComplete || selectedColor == default) return;
+        if (Input.touchCount == 0) return;
+
+        Touch t = Input.GetTouch(0); // only track primary finger for painting
+
+        if (t.phase == TouchPhase.Began)
+        {
+            // UI check happens HERE, immediately at the start — before any paint logic
+            if (IsScreenPosOverUI(t.position)) return;
+
+            if (!TryGetTexelFromScreen(t.position, out int px, out int py)) return;
+
+            if (currentTool == PaintTool.Fill)
+            {
+                TryPaint(px, py);
+            }
+            else if (currentTool == PaintTool.Brush)
+            {
+                isDraggingBrush = true;
+                IsBrushActive = true;
+                strokeOriginals.Clear();
+                lastDragPos = new Vector2Int(px, py);
+                ApplyBrush(px, py);
+            }
+        }
+        else if ((t.phase == TouchPhase.Moved || t.phase == TouchPhase.Stationary)
+                 && isDraggingBrush && currentTool == PaintTool.Brush)
+        {
+            if (!TryGetTexelFromScreen(t.position, out int px, out int py)) return;
+
+            float dist = Vector2.Distance(lastDragPos, new Vector2(px, py));
+            int steps = Mathf.Max(1, Mathf.FloorToInt(dist / (brushRadius * 0.5f)));
+            for (int i = 1; i <= steps; i++)
+            {
+                float frac = (float)i / steps;
+                ApplyBrush(
+                    Mathf.RoundToInt(Mathf.Lerp(lastDragPos.x, px, frac)),
+                    Mathf.RoundToInt(Mathf.Lerp(lastDragPos.y, py, frac)));
+            }
+            lastDragPos = new Vector2Int(px, py);
+        }
+        else if (t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled)
+        {
+            if (isDraggingBrush && currentTool == PaintTool.Brush)
+            {
+                isDraggingBrush = false;
+                IsBrushActive  = false;
+                if (strokeOriginals.Count > 0)
+                {
+                    var pd = new PixelDiff[strokeOriginals.Count];
+                    int i = 0;
+                    foreach (var kv in strokeOriginals)
+                        pd[i++] = new PixelDiff { idx = kv.Key, oldColor = kv.Value };
+                    PushUndo(pd);
+                    strokeOriginals.Clear();
+                }
+            }
+        }
     }
 
     void InitTexture()
@@ -146,33 +234,14 @@ public class PaintController : MonoBehaviour
         bottomSR.sortingOrder = 0; // Behind the outline
     }
 
+    // PC ONLY — On mobile these are not called because simulateMouseWithTouches = false.
     void OnMouseDown()
     {
         if (isGameComplete) return;
         if (selectedColor == default) return;
+        if (IsPointerOverUI()) return;
 
-        // Block painting when the click lands on any UI element (e.g. RGB picker, palette)
-        if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject())
-            return;
-
-        // Convert mouse position to world point
-        Vector3 worldPos = Camera.main.ScreenToWorldPoint(Input.mousePosition);
-        worldPos.z = 0;
-
-        // Convert world position to local position of the sprite
-        Vector3 localPos = transform.InverseTransformPoint(worldPos);
-
-        // Convert local pos to UV: sprite pivot is (0.5, 0.5)
-        Bounds b = spriteRenderer.sprite.bounds;
-        float u = (localPos.x - b.min.x) / b.size.x;
-        float v = (localPos.y - b.min.y) / b.size.y;
-
-        if (u < 0 || u > 1 || v < 0 || v > 1) return;
-
-        int px = Mathf.FloorToInt(u * texWidth);
-        int py = Mathf.FloorToInt(v * texHeight);
-        px = Mathf.Clamp(px, 0, texWidth - 1);
-        py = Mathf.Clamp(py, 0, texHeight - 1);
+        if (!TryGetInputTexelCoord(out int px, out int py)) return;
 
         if (currentTool == PaintTool.Fill)
         {
@@ -180,9 +249,9 @@ public class PaintController : MonoBehaviour
         }
         else if (currentTool == PaintTool.Brush)
         {
-            // Start brush stroke
             isDraggingBrush = true;
-            currentStrokeUndoState = (Color32[])pixels.Clone();
+            IsBrushActive = true;
+            strokeOriginals.Clear();
             lastDragPos = new Vector2Int(px, py);
             ApplyBrush(px, py);
         }
@@ -192,20 +261,8 @@ public class PaintController : MonoBehaviour
     {
         if (isGameComplete || selectedColor == default || currentTool != PaintTool.Brush) return;
         if (!isDraggingBrush) return;
-        
-        // Let user drag out of UI (no block while dragging)
-        
-        Vector3 worldPos = Camera.main.ScreenToWorldPoint(Input.mousePosition);
-        Vector3 localPos = transform.InverseTransformPoint(worldPos);
-        Bounds b = spriteRenderer.sprite.bounds;
-        
-        float u = (localPos.x - b.min.x) / b.size.x;
-        float v = (localPos.y - b.min.y) / b.size.y;
 
-        int px = Mathf.FloorToInt(u * texWidth);
-        int py = Mathf.FloorToInt(v * texHeight);
-        px = Mathf.Clamp(px, 0, texWidth - 1);
-        py = Mathf.Clamp(py, 0, texHeight - 1);
+        if (!TryGetInputTexelCoord(out int px, out int py)) return;
 
         // Interpolate between last point and this point to prevent gaps if mouse moves fast
         float distance = Vector2.Distance(lastDragPos, new Vector2(px, py));
@@ -226,12 +283,92 @@ public class PaintController : MonoBehaviour
     {
         if (isDraggingBrush && currentTool == PaintTool.Brush)
         {
-            // End brush stroke, commit to undo
             isDraggingBrush = false;
-            undoStack.Add(currentStrokeUndoState);
-            if (undoStack.Count > MAX_UNDO_STEPS)
-                undoStack.RemoveAt(0);
+            IsBrushActive = false;
+            if (strokeOriginals.Count > 0)
+            {
+                var pd = new PixelDiff[strokeOriginals.Count];
+                int i = 0;
+                foreach (var kv in strokeOriginals)
+                    pd[i++] = new PixelDiff { idx = kv.Key, oldColor = kv.Value };
+                PushUndo(pd);
+                strokeOriginals.Clear();
+            }
         }
+    }
+
+    // ── Input helpers (PC mouse + Mobile touch) ─────────
+
+    /// Returns true when any current pointer/touch is over a UI element.
+    bool IsPointerOverUI()
+    {
+        // Mouse (PC)
+        if (Input.touchCount == 0)
+            return IsScreenPosOverUI(Input.mousePosition);
+
+        // Touch: check all active fingers
+        foreach (Touch t in Input.touches)
+            if (IsScreenPosOverUI(t.position)) return true;
+
+        return false;
+    }
+
+    /// Reliable UI hit test using EventSystem.RaycastAll.
+    bool IsScreenPosOverUI(Vector2 screenPos)
+    {
+        if (EventSystem.current == null) return false;
+        var ped = new PointerEventData(EventSystem.current) { position = screenPos };
+        var results = new List<RaycastResult>();
+        EventSystem.current.RaycastAll(ped, results);
+        return results.Count > 0;
+    }
+
+    /// Converts an explicit screen position to texel coordinates on this sprite.
+    bool TryGetTexelFromScreen(Vector2 screenPos, out int px, out int py)
+    {
+        Vector3 worldPos = Camera.main.ScreenToWorldPoint(new Vector3(screenPos.x, screenPos.y, 0));
+        worldPos.z = 0;
+        Vector3 localPos = transform.InverseTransformPoint(worldPos);
+        Bounds b = spriteRenderer.sprite.bounds;
+        float u = (localPos.x - b.min.x) / b.size.x;
+        float v = (localPos.y - b.min.y) / b.size.y;
+        if (u < 0 || u > 1 || v < 0 || v > 1) { px = py = 0; return false; }
+        px = Mathf.Clamp(Mathf.FloorToInt(u * texWidth),  0, texWidth  - 1);
+        py = Mathf.Clamp(Mathf.FloorToInt(v * texHeight), 0, texHeight - 1);
+        return true;
+    }
+
+    /// Gets the primary input position (touch or mouse) and converts it to texel
+    /// coordinates on this sprite. Returns false if out of bounds.
+    bool TryGetInputTexelCoord(out int px, out int py)
+    {
+        Vector2 screenPos;
+#if UNITY_EDITOR || UNITY_STANDALONE
+        screenPos = Input.mousePosition;
+#else
+        if (Input.touchCount == 0) { px = py = 0; return false; }
+        screenPos = Input.GetTouch(0).position;
+#endif
+        Vector3 worldPos = Camera.main.ScreenToWorldPoint(new Vector3(screenPos.x, screenPos.y, 0));
+        worldPos.z = 0;
+        Vector3 localPos = transform.InverseTransformPoint(worldPos);
+        Bounds b = spriteRenderer.sprite.bounds;
+        float u = (localPos.x - b.min.x) / b.size.x;
+        float v = (localPos.y - b.min.y) / b.size.y;
+        if (u < 0 || u > 1 || v < 0 || v > 1) { px = py = 0; return false; }
+        px = Mathf.Clamp(Mathf.FloorToInt(u * texWidth),  0, texWidth  - 1);
+        py = Mathf.Clamp(Mathf.FloorToInt(v * texHeight), 0, texHeight - 1);
+        return true;
+    }
+
+    /// Returns true if every active touch started on a UI element (i.e., should be blocked from painting).
+    bool IsTouchBlockedByUI()
+    {
+        if (Input.touchCount == 0) return false;
+        // Block if ALL active touches are UI-touch (avoids blocking when one finger is on the canvas)
+        foreach (Touch t in Input.touches)
+            if (!uiBlockedFingers.Contains(t.fingerId)) return false;
+        return true;
     }
 
     public void SetTool(PaintTool tool)
@@ -268,18 +405,12 @@ public class PaintController : MonoBehaviour
         // Don't repaint same color
         if (ColorDistance(targetPixel, fillColor) < 0.01f) return;
 
-        // Clone current state for undo
-        Color32[] prevState = (Color32[])pixels.Clone();
+        // Run flood fill — returns the diff
+        PixelDiff[] diff = FloodFill(startX, startY, targetPixel, fillColor);
 
-        // Run flood fill
-        bool painted = FloodFill(startX, startY, targetPixel, fillColor);
-
-        if (painted)
+        if (diff != null && diff.Length > 0)
         {
-            // Push to undo stack
-            undoStack.Add(prevState);
-            if (undoStack.Count > MAX_UNDO_STEPS)
-                undoStack.RemoveAt(0);
+            PushUndo(diff);
 
             if (wasWhite)
             {
@@ -305,16 +436,17 @@ public class PaintController : MonoBehaviour
             {
                 if (x * x + y * y <= brushRadius * brushRadius)
                 {
-                    int targetX = centerX + x;
-                    int targetY = centerY + y;
+                    int tx = centerX + x;
+                    int ty = centerY + y;
 
-                    if (targetX >= 0 && targetX < texWidth && targetY >= 0 && targetY < texHeight)
+                    if (tx >= 0 && tx < texWidth && ty >= 0 && ty < texHeight)
                     {
-                        int idx = targetY * texWidth + targetX;
-                        Color32 orig = originalPixels[idx];
+                        int idx = ty * texWidth + tx;
+                        if (IsOutlinePixel(originalPixels[idx])) continue;
 
-                        // Skip painting on actual outline border pixels 
-                        if (IsOutlinePixel(orig)) continue;
+                        // Record original color the first time we touch this pixel in this stroke
+                        if (!strokeOriginals.ContainsKey(idx))
+                            strokeOriginals[idx] = pixels[idx];
 
                         pixels[idx] = brushColor;
                         painted = true;
@@ -335,23 +467,32 @@ public class PaintController : MonoBehaviour
     {
         if (isGameComplete || undoStack.Count == 0) return;
 
-        // Pop last state
-        pixels = undoStack[undoStack.Count - 1];
+        PixelDiff[] diff = undoStack[undoStack.Count - 1];
         undoStack.RemoveAt(undoStack.Count - 1);
 
-        // Apply to texture
+        // Restore only the changed pixels
+        foreach (var d in diff)
+            pixels[d.idx] = d.oldColor;
+
         paintTexture.SetPixels32(pixels);
         paintTexture.Apply();
     }
 
-    bool FloodFill(int startX, int startY, Color32 targetColor, Color32 fillColor)
+    void PushUndo(PixelDiff[] diff)
     {
-        if (ColorDistance(targetColor, fillColor) < 0.01f) return false;
+        undoStack.Add(diff);
+        if (undoStack.Count > maxUndoSteps)
+            undoStack.RemoveAt(0);
+    }
+
+    PixelDiff[] FloodFill(int startX, int startY, Color32 targetColor, Color32 fillColor)
+    {
+        if (ColorDistance(targetColor, fillColor) < 0.01f) return null;
 
         Stack<Vector2Int> stack = new Stack<Vector2Int>();
         stack.Push(new Vector2Int(startX, startY));
 
-        bool anyFilled = false;
+        var diff = new List<PixelDiff>();
 
         while (stack.Count > 0)
         {
@@ -365,18 +506,13 @@ public class PaintController : MonoBehaviour
             Color32 current = pixels[idx];
             Color32 orig = originalPixels[idx];
 
-            // Use original pixel to firmly detect walls
             if (IsOutlinePixel(orig)) continue;
-
-            // Check if this pixel is part of the region we are replacing
             if (ColorDistance(current, targetColor) > fillTolerance) continue;
-
-            // Prevent infinite loop if we are refilling with a very similar color
             if (current.r == fillColor.r && current.g == fillColor.g && current.b == fillColor.b) continue;
 
-            // Apply solid color (the bottom layer is masked by the top outline layer, making it look flush and anti-aliased)
+            // Record the old value before overwriting
+            diff.Add(new PixelDiff { idx = idx, oldColor = current });
             pixels[idx] = fillColor;
-            anyFilled = true;
 
             stack.Push(new Vector2Int(x + 1, y));
             stack.Push(new Vector2Int(x - 1, y));
@@ -384,13 +520,14 @@ public class PaintController : MonoBehaviour
             stack.Push(new Vector2Int(x, y - 1));
         }
 
-        if (anyFilled)
+        if (diff.Count > 0)
         {
             paintTexture.SetPixels32(pixels);
             paintTexture.Apply();
+            return diff.ToArray();
         }
 
-        return anyFilled;
+        return null;
     }
 
     bool IsOutlinePixel(Color32 c)

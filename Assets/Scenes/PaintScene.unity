@@ -1107,6 +1107,7 @@ MonoBehaviour:
   outlineTolerance: 0.2
   fillTolerance: 0.8
   uiManager: {fileID: 1346995544}
+  maxUndoSteps: 20
 --- !u!61 &440113618
 BoxCollider2D:
   m_ObjectHideFlags: 0

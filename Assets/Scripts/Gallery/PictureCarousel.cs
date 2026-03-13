@@ -16,6 +16,8 @@ public class PictureCarousel : MonoBehaviour, IDragHandler, IEndDragHandler, IBe
     public RectTransform contentContainer;   // parent of all cards
     public Button selectButton;              // "Chọn tranh này" button
     public Text selectedNameText;            // shows name of center card
+    public Button leftArrowButton;           // ← arrow
+    public Button rightArrowButton;          // → arrow
 
     [Header("Cards")]
     public List<PictureCard> cards = new List<PictureCard>();
@@ -50,6 +52,12 @@ public class PictureCarousel : MonoBehaviour, IDragHandler, IEndDragHandler, IBe
 
         if (selectButton != null)
             selectButton.onClick.AddListener(OnSelectClicked);
+
+        if (leftArrowButton != null)
+            leftArrowButton.onClick.AddListener(GoLeft);
+
+        if (rightArrowButton != null)
+            rightArrowButton.onClick.AddListener(GoRight);
 
         UpdateCardVisuals();
         UpdateSelectionUI();

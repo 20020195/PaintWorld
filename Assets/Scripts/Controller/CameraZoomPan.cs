@@ -3,14 +3,10 @@ using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 /// <summary>
-/// Zoom (scroll wheel) and Pan (middle-mouse drag OR right-mouse drag) for
-/// the orthographic Main Camera. Attach to the Main Camera GameObject.
-/// 
-/// Controls:
-///   Scroll wheel        → zoom in / out  
-///   Middle-mouse drag   → pan
-///   Right-mouse drag    → pan (alternative)
-///   Double-click scroll (scroll fast) or Home key → reset view
+/// Zoom and Pan for the orthographic Main Camera.
+/// PC:     Scroll wheel to zoom, Middle/Right mouse drag to pan.
+/// Mobile: Pinch (2 fingers) to zoom, 1-finger drag to pan.
+/// Attach to the Main Camera GameObject.
 /// </summary>
 public class CameraZoomPan : MonoBehaviour
 {
@@ -47,9 +43,11 @@ public class CameraZoomPan : MonoBehaviour
     private Vector3 defaultPosition;
 
     // For pixel-perfect panning
-    private Vector3 panOriginWorld;
-    private Vector3 panOriginCamPos;
     private bool isPanning;
+    private Vector2 lastPanScreenPos;
+
+    // Touch state
+    private float lastPinchDistance = 0f;
 
     void Awake()
     {
@@ -66,15 +64,17 @@ public class CameraZoomPan : MonoBehaviour
         defaultPosition  = transform.position;
 
         if (resetViewButton != null)
-        {
             resetViewButton.onClick.AddListener(ResetView);
-        }
     }
 
     void Update()
     {
-        HandleZoom();
-        HandlePan();
+#if UNITY_EDITOR || UNITY_STANDALONE
+        HandleMouseZoom();
+        HandleMousePan();
+#else
+        HandleTouchInput();
+#endif
         HandleReset();
 
         // Smoothly approach target zoom
@@ -82,74 +82,138 @@ public class CameraZoomPan : MonoBehaviour
             Time.unscaledDeltaTime * zoomSmoothSpeed);
     }
 
-    // ── Zoom ─────────────────────────────────────────────────────
+    // ──────────────────────────── PC Mouse ────────────────────────────────
 
-    void HandleZoom()
+    void HandleMouseZoom()
     {
         float scroll = Input.GetAxis("Mouse ScrollWheel");
         if (Mathf.Abs(scroll) < 0.001f) return;
 
-        // Don't zoom when pointer is over UI
         if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject()) return;
 
-        // Zoom toward / away from the mouse cursor position
         Vector3 mouseWorldBefore = cam.ScreenToWorldPoint(Input.mousePosition);
 
-        if (scroll > 0)
-            targetOrthoSize /= zoomSpeed;
-        else
-            targetOrthoSize *= zoomSpeed;
+        if (scroll > 0) targetOrthoSize /= zoomSpeed;
+        else            targetOrthoSize *= zoomSpeed;
 
         targetOrthoSize = Mathf.Clamp(targetOrthoSize, minOrthoSize, maxOrthoSize);
 
-        // Reposition camera so the point under the cursor stays fixed
-        // (do it next frame via coroutine-free approach — apply instantly for now)
+        // Keep the point under the cursor fixed
         cam.orthographicSize = targetOrthoSize;
         Vector3 mouseWorldAfter = cam.ScreenToWorldPoint(Input.mousePosition);
-        Vector3 delta = mouseWorldBefore - mouseWorldAfter;
-        Vector3 newPos = transform.position + delta;
-        newPos = ClampPosition(newPos);
-        transform.position = newPos;
-        defaultPosition = defaultPosition; // don't update default
+        transform.position = ClampPosition(transform.position + (mouseWorldBefore - mouseWorldAfter));
     }
 
-    // ── Pan ──────────────────────────────────────────────────────
-
-    void HandlePan()
+    void HandleMousePan()
     {
-        bool panButtonDown = Input.GetMouseButtonDown(2) || Input.GetMouseButtonDown(1);
-        bool panButton     = Input.GetMouseButton(2)     || Input.GetMouseButton(1);
+        bool panDown   = Input.GetMouseButtonDown(2) || Input.GetMouseButtonDown(1);
+        bool panHeld   = Input.GetMouseButton(2)     || Input.GetMouseButton(1);
+        bool panUp     = Input.GetMouseButtonUp(2)   || Input.GetMouseButtonUp(1);
 
-        if (panButtonDown)
+        if (panDown)
         {
-            // Don't start pan on UI
             if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject()) return;
-            isPanning = true;
+            isPanning       = true;
+            lastPanScreenPos = Input.mousePosition;
         }
 
-        if (isPanning && panButton)
+        if (isPanning && panHeld)
         {
-            // Use raw screen-pixel delta instead of ScreenToWorldPoint.
-            // Avoids feedback loop: moving the camera would shift the world-space
-            // result of ScreenToWorldPoint, causing the jitter.
             Vector2 screenDelta = new Vector2(
                 Input.GetAxis("Mouse X"),
                 Input.GetAxis("Mouse Y"));
 
-            // World units per screen pixel for an orthographic camera
             float worldPerPixel = (cam.orthographicSize * 2f) / Screen.height;
-
             Vector3 move = new Vector3(
                 -screenDelta.x * worldPerPixel * panSpeed,
-                -screenDelta.y * worldPerPixel * panSpeed,
-                0f);
+                -screenDelta.y * worldPerPixel * panSpeed, 0f);
 
-            Vector3 newPos = ClampPosition(transform.position + move);
-            transform.position = newPos;
+            transform.position = ClampPosition(transform.position + move);
         }
 
-        if (Input.GetMouseButtonUp(2) || Input.GetMouseButtonUp(1))
+        if (panUp) isPanning = false;
+    }
+
+    // ──────────────────────────── Mobile Touch ────────────────────────────
+
+    void HandleTouchInput()
+    {
+        int touchCount = Input.touchCount;
+
+        if (touchCount == 2)
+        {
+            isPanning = false; // Cancel any 1-finger pan when a second finger appears
+            HandlePinchZoom();
+        }
+        else if (touchCount == 1)
+        {
+            lastPinchDistance = 0f; // Reset pinch when down to 1 finger
+            HandleOneFingePan();
+        }
+        else
+        {
             isPanning = false;
+            lastPinchDistance = 0f;
+        }
+    }
+
+    void HandlePinchZoom()
+    {
+        Touch t0 = Input.GetTouch(0);
+        Touch t1 = Input.GetTouch(1);
+
+        float currentDistance = Vector2.Distance(t0.position, t1.position);
+
+        if (lastPinchDistance <= 0f)
+        {
+            lastPinchDistance = currentDistance;
+            return;
+        }
+
+        float delta = currentDistance - lastPinchDistance;
+        lastPinchDistance = currentDistance;
+
+        // Midpoint in screen space for zoom-to-point
+        Vector2 midScreen  = (t0.position + t1.position) * 0.5f;
+        Vector3 midWorldBefore = cam.ScreenToWorldPoint(new Vector3(midScreen.x, midScreen.y, 0));
+
+        // Pinch factor: larger distance = zoom in
+        float pinchFactor = 1f - delta * 0.005f;
+        targetOrthoSize = Mathf.Clamp(targetOrthoSize * pinchFactor, minOrthoSize, maxOrthoSize);
+
+        // Instantly apply to get accurate world-space offset
+        cam.orthographicSize = targetOrthoSize;
+        Vector3 midWorldAfter = cam.ScreenToWorldPoint(new Vector3(midScreen.x, midScreen.y, 0));
+        transform.position = ClampPosition(transform.position + (midWorldBefore - midWorldAfter));
+    }
+
+    void HandleOneFingePan()
+    {
+        Touch t = Input.GetTouch(0);
+
+        // Do not pan if the user is actively drawing with brush
+        if (PaintController.IsBrushActive) return;
+
+        // Skip if over UI
+        if (EventSystem.current != null && EventSystem.current.IsPointerOverGameObject(t.fingerId)) return;
+
+        if (t.phase == TouchPhase.Began)
+        {
+            isPanning        = true;
+            lastPanScreenPos = t.position;
+        }
+        else if (isPanning && (t.phase == TouchPhase.Moved || t.phase == TouchPhase.Stationary))
+        {
+            Vector2 delta = t.position - lastPanScreenPos;
+            float worldPerPixel = (cam.orthographicSize * 2f) / Screen.height;
+            Vector3 move = new Vector3(-delta.x * worldPerPixel, -delta.y * worldPerPixel, 0f);
+            transform.position = ClampPosition(transform.position + move);
+            lastPanScreenPos = t.position;
+        }
+        else if (t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled)
+        {
+            isPanning = false;
+        }
     }
 
     // ── Reset ────────────────────────────────────────────────────
@@ -162,7 +226,7 @@ public class CameraZoomPan : MonoBehaviour
 
     public void ResetView()
     {
-        targetOrthoSize = defaultOrthoSize;
+        targetOrthoSize    = defaultOrthoSize;
         transform.position = defaultPosition;
     }
 
@@ -172,7 +236,7 @@ public class CameraZoomPan : MonoBehaviour
     {
         pos.x = Mathf.Clamp(pos.x, -maxPanDistance, maxPanDistance);
         pos.y = Mathf.Clamp(pos.y, -maxPanDistance, maxPanDistance);
-        pos.z = defaultPosition.z; // keep Z fixed
+        pos.z = defaultPosition.z;
         return pos;
     }
 }
