@@ -188,7 +188,8 @@ public class PaintController : MonoBehaviour
             
             // Map brightness to alpha: 0 brightness (black) = 255 alpha. 1 brightness (white) = 0 alpha.
             byte a = (byte)Mathf.Clamp(255 - (brightness * 255f), 0, 255);
-            outlinePixels[i] = new Color32(c.r, c.g, c.b, a);
+            // Use pure black (0,0,0) for the outline, using only alpha to blend. This completely eliminates white/gray fringing.
+            outlinePixels[i] = new Color32(0, 0, 0, a);
         }
         
         outlineTex.SetPixels32(outlinePixels);
@@ -506,7 +507,17 @@ public class PaintController : MonoBehaviour
             Color32 current = pixels[idx];
             Color32 orig = originalPixels[idx];
 
-            if (IsOutlinePixel(orig)) continue;
+            if (IsOutlinePixel(orig))
+            {
+                // Thả lỏng thêm 1 pixel vào trong outline để màu chui gọn xuống gầm viền.
+                // Hàm continue ngăn không cho stack lan toả qua bên kia viền.
+                if (current.r != fillColor.r || current.g != fillColor.g || current.b != fillColor.b)
+                {
+                    diff.Add(new PixelDiff { idx = idx, oldColor = current });
+                    pixels[idx] = fillColor;
+                }
+                continue;
+            }
             if (ColorDistance(current, targetColor) > fillTolerance) continue;
             if (current.r == fillColor.r && current.g == fillColor.g && current.b == fillColor.b) continue;
 
