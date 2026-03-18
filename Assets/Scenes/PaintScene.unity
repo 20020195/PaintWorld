@@ -4554,7 +4554,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   minOrthoSize: 0.5
-  maxOrthoSize: 10
+  maxOrthoSize: 15
   zoomSpeed: 1.25
   zoomSmoothSpeed: 12
   panSpeed: 20
