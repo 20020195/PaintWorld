@@ -12,10 +12,6 @@ using System.Collections.Generic;
 /// </summary>
 public class PictureSelectSetup : EditorWindow
 {
-    private List<Sprite>  sprites  = new List<Sprite>  { null, null, null };
-    private List<string>  names    = new List<string>  { "Phong cảnh", "Mèo dễ thương", "Cá vàng" };
-    private List<int>     regions  = new List<int>     { 6, 5, 5 };
-
     [MenuItem("Paint Game/Setup Picture Select")]
     public static void ShowWindow() => GetWindow<PictureSelectSetup>("Picture Select Setup");
 
@@ -24,29 +20,14 @@ public class PictureSelectSetup : EditorWindow
         GUILayout.Label("Picture Select Scene Setup", EditorStyles.boldLabel);
         EditorGUILayout.Space();
 
-        // Picture slots
-        for (int i = 0; i < sprites.Count; i++)
-        {
-            EditorGUILayout.BeginHorizontal();
-            sprites[i] = (Sprite)EditorGUILayout.ObjectField($"Picture {i+1}", sprites[i], typeof(Sprite), false, GUILayout.Width(320));
-            names[i]   = EditorGUILayout.TextField(names[i], GUILayout.Width(120));
-            regions[i] = EditorGUILayout.IntField(regions[i], GUILayout.Width(40));
-            EditorGUILayout.EndHorizontal();
-        }
-
-        EditorGUILayout.Space();
         EditorGUILayout.HelpBox(
-            "Assign sprites from Assets/Sprites/Outline/\n" +
-            "Recommended: coloring_book_outline, coloring_book_cat, coloring_book_fish\n" +
-            "Fields: [Sprite] [Name] [Regions]",
+            "This will create the Picture Select scene.\n" +
+            "Cards will be dynamically loaded at runtime from any 'PictureData' ScriptableObjects found in the project.",
             MessageType.Info);
+            
         EditorGUILayout.Space();
 
-        bool anySprite = false;
-        foreach (var s in sprites) if (s != null) anySprite = true;
-        GUI.enabled = anySprite;
         if (GUILayout.Button("Create Picture Select Scene", GUILayout.Height(40))) CreateScene();
-        GUI.enabled = true;
     }
 
     void CreateScene()
@@ -98,8 +79,6 @@ public class PictureSelectSetup : EditorWindow
             new Vector2(0,0), new Vector2(0,1),
             new Vector2(60f, 0), new Vector2(110f, 0),
             "← Menu", new Color(0.28f, 0.28f, 0.38f), 16);
-        backBtn.GetComponent<Button>().onClick.AddListener(
-            () => UnityEngine.SceneManagement.SceneManager.LoadScene("MainMenu"));
 
         // Title in top bar
         MakeText("TopTitle", topBar.transform,
@@ -112,12 +91,12 @@ public class PictureSelectSetup : EditorWindow
             "Chọn bức tranh bạn muốn tô", 20, new Color(0.7f, 0.7f, 0.85f));
 
         // ── Carousel viewport ────────────────────────────────────
-        // Viewport mask (clips cards outside bounds)
         var viewport = MakePanel("CarouselViewport", canvasGO.transform,
             new Vector2(0, 0.12f), new Vector2(1, 0.82f),
             Vector2.zero, Vector2.zero);
         viewport.GetComponent<Image>().color = new Color(0,0,0,0);
         viewport.AddComponent<RectMask2D>();
+        var carouselDragProxy = viewport.AddComponent<CarouselDragProxy>();
 
         // Content container (moves left/right)
         var contentGO = new GameObject("CarouselContent");
@@ -128,60 +107,6 @@ public class PictureSelectSetup : EditorWindow
         contentRT.sizeDelta = new Vector2(0, 0);
         contentRT.anchoredPosition = Vector2.zero;
 
-        // Add IEventSystemHandler routing to viewport for drag
-        var carouselDragProxy = viewport.AddComponent<CarouselDragProxy>();
-
-        // ── Create picture cards ─────────────────────────────────
-        float cardWidth   = 420f;
-        float cardHeight  = 380f;
-        float cardSpacing = 520f;
-        var cardList = new List<PictureCard>();
-
-        int validCount = 0;
-        for (int i = 0; i < sprites.Count; i++)
-        {
-            if (sprites[i] == null) continue;
-
-            // Card panel
-            var cardGO = MakePanel($"Card_{i}", contentGO.transform,
-                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-                new Vector2(cardWidth, cardHeight),
-                new Vector2(validCount * cardSpacing, 0));
-            cardGO.GetComponent<Image>().color = new Color(0.18f, 0.18f, 0.28f);
-
-            // Shadow/border
-            var borderGO = MakePanel("Border", cardGO.transform,
-                Vector2.zero, Vector2.one,
-                new Vector2(-6f, -6f), Vector2.zero);
-            borderGO.GetComponent<Image>().color = new Color(0.55f, 0.35f, 0.85f, 0.5f);
-            borderGO.transform.SetAsFirstSibling();
-
-            // Picture image
-            var imgGO = MakePanel("PictureImage", cardGO.transform,
-                new Vector2(0.05f, 0.20f), new Vector2(0.95f, 0.95f),
-                Vector2.zero, Vector2.zero);
-            var imgComp = imgGO.GetComponent<Image>();
-            imgComp.sprite = sprites[i];
-            imgComp.preserveAspect = true;
-            imgComp.color = Color.white;
-
-            // Name label at bottom of card
-            var nameGO = MakeText($"NameLabel_{i}", cardGO.transform,
-                new Vector2(0, 0.02f), new Vector2(1, 0.20f),
-                names[i], 22, new Color(0.9f, 0.9f, 1f));
-
-            // PictureCard component
-            var card = cardGO.AddComponent<PictureCard>();
-            card.outlineSprite = sprites[i];
-            card.pictureName   = names[i];
-            card.totalRegions  = regions[i];
-            card.cardImage     = imgComp;
-            card.nameLabel     = nameGO;
-
-            cardList.Add(card);
-            validCount++;
-        }
-
         // ── Bottom bar: Selected name + Choose button ─────────────
         var bottomBar = MakePanel("BottomBar", canvasGO.transform,
             new Vector2(0, 0), new Vector2(1, 0.13f),
@@ -190,7 +115,7 @@ public class PictureSelectSetup : EditorWindow
 
         var selectedNameText = MakeText("SelectedNameText", bottomBar.transform,
             new Vector2(0.05f, 0.45f), new Vector2(0.60f, 0.95f),
-            validCount > 0 ? names[0] : "", 22, new Color(1f, 0.9f, 0.5f));
+            "", 22, new Color(1f, 0.9f, 0.5f));
 
         var chooseBtn = MakeButton("ChooseButton", bottomBar.transform,
             new Vector2(1, 0.5f), new Vector2(1, 0.5f),
@@ -213,25 +138,32 @@ public class PictureSelectSetup : EditorWindow
         carouselGO.transform.SetParent(canvasGO.transform, false);
         var carousel = carouselGO.AddComponent<PictureCarousel>();
         carousel.contentContainer  = contentRT;
-        carousel.cards             = cardList;
         carousel.selectButton      = chooseBtn.GetComponent<Button>();
         carousel.selectedNameText  = selectedNameText;
-        carousel.cardSpacing       = cardSpacing;
+        carousel.backButton        = backBtn.GetComponent<Button>();
+        carousel.leftArrowButton   = leftArrow.GetComponent<Button>();
+        carousel.rightArrowButton  = rightArrow.GetComponent<Button>();
+        carousel.cardSpacing       = 520f;
         carousel.paintSceneName    = "PaintScene";
 
-        // Wire arrow buttons
-        leftArrow.GetComponent<Button>().onClick.AddListener(carousel.GoLeft);
-        rightArrow.GetComponent<Button>().onClick.AddListener(carousel.GoRight);
-
-        // Wire drag proxy
         carouselDragProxy.carousel = carousel;
+
+        // Find and attach all PictureData scriptable objects
+        string[] guids = AssetDatabase.FindAssets("t:PictureData");
+        List<PictureData> dataList = new List<PictureData>();
+        foreach (string guid in guids)
+        {
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            PictureData pd = AssetDatabase.LoadAssetAtPath<PictureData>(path);
+            if (pd != null) dataList.Add(pd);
+        }
+        carousel.pictureDataList = dataList.ToArray();
 
         EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
         EditorUtility.DisplayDialog("Done!",
-            "Picture Select scene created!\n\n" +
-            "Save as 'PictureSelect' (Ctrl+S)\n\n" +
-            "Then add all 3 scenes to File → Build Settings:\n" +
-            "  0: MainMenu\n  1: PictureSelect\n  2: PaintScene",
+            $"Picture Select scene created!\n\n" +
+            $"Found {dataList.Count} PictureData objects.\n\n" +
+            "Save as 'PictureSelect' (Ctrl+S)",
             "OK");
     }
 

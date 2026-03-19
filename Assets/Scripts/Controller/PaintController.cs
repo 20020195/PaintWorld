@@ -23,10 +23,6 @@ public class PaintController : MonoBehaviour
     [Tooltip("Radius of the brush tool in pixels")]
     public int brushRadius = 15;
 
-    [Header("Settings")]
-    [Tooltip("Total distinct paintable regions in the image")]
-    public int totalRegions = 6;
-
     [Tooltip("Tolerance for detecting outline pixels (0-1). Black pixels within this threshold are considered outline.")]
     public float outlineTolerance = 0.2f;
 
@@ -42,7 +38,6 @@ public class PaintController : MonoBehaviour
     private Color32[] pixels;          // current (mutable) pixel array
     private Color32[] originalPixels;  // backup of original, never modified
     private int texWidth, texHeight;
-    private int paintedRegions = 0;
     private Color selectedColor = Color.blue;
     [Header("Drawing History")]
     [Tooltip("Maximum number of undo steps. Higher = more RAM usage (especially for large images).")]
@@ -52,7 +47,8 @@ public class PaintController : MonoBehaviour
     // Each UndoPatch = array of (pixelIndex, oldColor) — tiny for small strokes/fills.
     private struct PixelDiff { public int idx; public Color32 oldColor; }
     private List<PixelDiff[]> undoStack = new List<PixelDiff[]>();
-    private bool isGameComplete = false;
+
+    public bool IsGameComplete { get; private set; } = false;
 
     // Brush tracking: accumulate diffs across a whole stroke
     private bool isDraggingBrush = false;
@@ -74,11 +70,9 @@ public class PaintController : MonoBehaviour
     {
         spriteRenderer = GetComponent<SpriteRenderer>();
 
-        // Load data from PictureSelect if available
         if (GameData.selectedSprite != null)
         {
             spriteRenderer.sprite = GameData.selectedSprite;
-            totalRegions = GameData.totalRegions;
         }
 
         InitTexture();
@@ -97,9 +91,49 @@ public class PaintController : MonoBehaviour
 #endif
     }
 
+    void OnApplicationQuit()
+    {
+        SaveCurrentProgress();
+    }
+
+    void OnApplicationPause(bool pauseStatus)
+    {
+        if (pauseStatus) SaveCurrentProgress();
+    }
+
+    public void SaveCurrentProgress()
+    {
+        if (IsGameComplete || string.IsNullOrEmpty(GameData.selectedPictureName) || paintTexture == null) return;
+        
+        Color32[] currentColors = paintTexture.GetPixels32();
+        Color32[] composited = new Color32[currentColors.Length];
+
+        for(int i = 0; i < currentColors.Length; i++)
+        {
+            Color32 orig = originalPixels[i];
+            float brightness = (orig.r + orig.g + orig.b) / (255f * 3f);
+            byte a = (byte)Mathf.Clamp(255 - (brightness * 255f), 0, 255);
+            
+            Color32 cColor = currentColors[i];
+            float alpha = a / 255f;
+            byte r = (byte)(0 * alpha + cColor.r * (1 - alpha));
+            byte g = (byte)(0 * alpha + cColor.g * (1 - alpha));
+            byte b = (byte)(0 * alpha + cColor.b * (1 - alpha));
+            
+            composited[i] = new Color32(r, g, b, 255);
+        }
+
+        Texture2D previewTex = new Texture2D(texWidth, texHeight, TextureFormat.RGBA32, false);
+        previewTex.SetPixels32(composited);
+        previewTex.Apply();
+
+        SaveSystem.SavePaintProgress(GameData.selectedPictureName, paintTexture, previewTex);
+        Destroy(previewTex);
+    }
+
     void HandleTouchPainting()
     {
-        if (isGameComplete || selectedColor == default) return;
+        if (IsGameComplete || selectedColor == default) return;
         if (Input.touchCount == 0) return;
 
         Touch t = Input.GetTouch(0); // only track primary finger for painting
@@ -206,12 +240,26 @@ public class PaintController : MonoBehaviour
         paintTexture.filterMode = FilterMode.Point; // Crisp edges underneath the stencil
 
         pixels = new Color32[originalPixels.Length];
-        for (int i = 0; i < pixels.Length; i++)
+
+        bool loaded = false;
+        if (!string.IsNullOrEmpty(GameData.selectedPictureName))
         {
-            pixels[i] = WHITE; // Fill bottom layer with white
+            loaded = SaveSystem.LoadPaintProgress(GameData.selectedPictureName, paintTexture);
         }
-        paintTexture.SetPixels32(pixels);
-        paintTexture.Apply();
+
+        if (loaded)
+        {
+            pixels = paintTexture.GetPixels32();
+        }
+        else
+        {
+            for (int i = 0; i < pixels.Length; i++)
+            {
+                pixels[i] = WHITE; // Fill bottom layer with white
+            }
+            paintTexture.SetPixels32(pixels);
+            paintTexture.Apply();
+        }
 
         // Assign bottom layer to a child GameObject
         Transform existingBottom = transform.Find("ColorLayer");
@@ -238,7 +286,7 @@ public class PaintController : MonoBehaviour
     // PC ONLY — On mobile these are not called because simulateMouseWithTouches = false.
     void OnMouseDown()
     {
-        if (isGameComplete) return;
+        if (IsGameComplete) return;
         if (selectedColor == default) return;
         if (IsPointerOverUI()) return;
 
@@ -260,7 +308,7 @@ public class PaintController : MonoBehaviour
 
     void OnMouseDrag()
     {
-        if (isGameComplete || selectedColor == default || currentTool != PaintTool.Brush) return;
+        if (IsGameComplete || selectedColor == default || currentTool != PaintTool.Brush) return;
         if (!isDraggingBrush) return;
 
         if (!TryGetInputTexelCoord(out int px, out int py)) return;
@@ -412,13 +460,6 @@ public class PaintController : MonoBehaviour
         if (diff != null && diff.Length > 0)
         {
             PushUndo(diff);
-
-            if (wasWhite)
-            {
-                paintedRegions++;
-                if (uiManager != null)
-                    uiManager.UpdateProgress(paintedRegions, totalRegions);
-            }
         }
     }
 
@@ -466,7 +507,7 @@ public class PaintController : MonoBehaviour
     /// <summary>Reverts the picture to the previous state.</summary>
     public void Undo()
     {
-        if (isGameComplete || undoStack.Count == 0) return;
+        if (IsGameComplete || undoStack.Count == 0) return;
 
         PixelDiff[] diff = undoStack[undoStack.Count - 1];
         undoStack.RemoveAt(undoStack.Count - 1);
@@ -562,12 +603,20 @@ public class PaintController : MonoBehaviour
 
     public void ResetPainting()
     {
-        paintedRegions = 0;
-        isGameComplete = false;
+        IsGameComplete = false;
         undoStack.Clear();
-        InitTexture();
 
-        if (uiManager != null)
-            uiManager.UpdateProgress(0, totalRegions);
+        if (!string.IsNullOrEmpty(GameData.selectedPictureName))
+            SaveSystem.DeleteSave(GameData.selectedPictureName);
+
+        InitTexture();
+    }
+
+    public void MarkComplete()
+    {
+        IsGameComplete = true;
+        
+        if (!string.IsNullOrEmpty(GameData.selectedPictureName))
+            SaveSystem.DeleteSave(GameData.selectedPictureName);
     }
 }

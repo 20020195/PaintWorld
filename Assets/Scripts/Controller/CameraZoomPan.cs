@@ -15,7 +15,7 @@ public class CameraZoomPan : MonoBehaviour
     public float minOrthoSize = 0.5f;
 
     [Tooltip("Maximum orthographic size (most zoomed out)")]
-    public float maxOrthoSize = 10f;
+    public float maxOrthoSize = 15f;
 
     [Tooltip("Scroll wheel zoom speed")]
     public float zoomSpeed = 1.2f;

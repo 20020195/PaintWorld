@@ -9,7 +9,6 @@ public class PictureCard : MonoBehaviour
     [Header("Picture Data")]
     public Sprite outlineSprite;
     public string pictureName = "Untitled";
-    public int totalRegions   = 6;
 
     [Header("Visual")]
     public Image cardImage;
@@ -17,9 +16,6 @@ public class PictureCard : MonoBehaviour
 
     void Awake()
     {
-        if (cardImage != null && outlineSprite != null)
-            cardImage.sprite = outlineSprite;
-
         if (nameLabel != null)
             nameLabel.text = pictureName;
     }

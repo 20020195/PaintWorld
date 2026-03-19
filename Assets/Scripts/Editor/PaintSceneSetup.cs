@@ -12,7 +12,6 @@ using UnityEngine.SceneManagement;
 public class PaintSceneSetup : EditorWindow
 {
     private Sprite outlineSprite;
-    private int   totalRegions  = 6;
     private float cameraSize    = 4f;
     private float maxOrthoSize  = 10f;
 
@@ -24,7 +23,6 @@ public class PaintSceneSetup : EditorWindow
         GUILayout.Label("Paint Game - Scene Setup", EditorStyles.boldLabel);
         EditorGUILayout.Space();
         outlineSprite = (Sprite)EditorGUILayout.ObjectField("Outline Sprite", outlineSprite, typeof(Sprite), false);
-        totalRegions  = EditorGUILayout.IntField("Total Regions", totalRegions);
         cameraSize    = EditorGUILayout.FloatField("Camera Size", cameraSize);
         EditorGUILayout.Space();
 
@@ -80,7 +78,6 @@ public class PaintSceneSetup : EditorWindow
         pictureSR.sprite = outlineSprite;
         pictureGO.AddComponent<BoxCollider2D>();
         var paintController = pictureGO.AddComponent<PaintController>();
-        paintController.totalRegions   = totalRegions;
         paintController.outlineTolerance = 0.2f;
         paintController.fillTolerance    = 0.8f;
 
@@ -111,13 +108,19 @@ public class PaintSceneSetup : EditorWindow
         // Undo button (center-left)
         var undoBtn = MakeTextButton("UndoButton", topBar.transform,
             new Vector2(0.5f, 0), new Vector2(0.5f, 1),
-            new Vector2(-60f, 0), new Vector2(90f, 0),
+            new Vector2(-110f, 0), new Vector2(90f, 0),
             "↶ Hủy bước", new Color(0.40f, 0.35f, 0.25f), 15);
+
+        // Reset Painting button
+        var resetPaintBtn = MakeTextButton("ResetPaintButton", topBar.transform,
+            new Vector2(0.5f, 0), new Vector2(0.5f, 1),
+            new Vector2(-10f, 0), new Vector2(90f, 0),
+            "🗑 Xóa màu", new Color(0.60f, 0.25f, 0.25f), 15);
 
         // Reset view button (center-right)
         var resetViewBtn = MakeTextButton("ResetViewButton", topBar.transform,
             new Vector2(0.5f, 0), new Vector2(0.5f, 1),
-            new Vector2(60f, 0), new Vector2(120f, 0),
+            new Vector2(90f, 0), new Vector2(90f, 0),
             "⊡ Reset View", new Color(0.25f, 0.35f, 0.55f), 15);
 
         // Complete button (right)
@@ -214,6 +217,32 @@ public class PaintSceneSetup : EditorWindow
             new Vector2(0, 38f), new Vector2(200, 48f),
             "🔄 Chơi lại", new Color(0.28f, 0.68f, 0.40f), 20);
 
+        // ── Save Confirm Panel ───────────────────────────────────
+        var saveConfirmPanel = MakePanel("SaveConfirmPanel", canvasGO.transform,
+            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
+            new Vector2(400, 240), Vector2.zero);
+        saveConfirmPanel.GetComponent<Image>().color = new Color(0.15f, 0.15f, 0.20f, 0.98f);
+        saveConfirmPanel.SetActive(false);
+
+        AddText(saveConfirmPanel.transform, "ConfirmTitle",
+            new Vector2(0, 0.65f), new Vector2(1, 0.95f),
+            "Lưu thay đổi?", 28, Color.white);
+
+        var cSaveBtn = MakeTextButton("ConfirmSaveBtn", saveConfirmPanel.transform,
+            new Vector2(0.3f, 0.35f), new Vector2(0.3f, 0.35f),
+            Vector2.zero, new Vector2(120, 48),
+            "Lưu & Thoát", new Color(0.2f, 0.6f, 0.3f), 18);
+
+        var cDontSaveBtn = MakeTextButton("ConfirmDontSaveBtn", saveConfirmPanel.transform,
+            new Vector2(0.7f, 0.35f), new Vector2(0.7f, 0.35f),
+            Vector2.zero, new Vector2(120, 48),
+            "Không Lưu", new Color(0.7f, 0.2f, 0.2f), 18);
+
+        var cCancelBtn = MakeTextButton("CancelExitBtn", saveConfirmPanel.transform,
+            new Vector2(0.5f, 0.12f), new Vector2(0.5f, 0.12f),
+            Vector2.zero, new Vector2(100, 36),
+            "Hủy", new Color(0.4f, 0.4f, 0.4f), 16);
+
         // ── GameUIManager ────────────────────────────────────────
         var uiMgrGO = new GameObject("GameUIManager");
         var uiMgr   = uiMgrGO.AddComponent<GameUIManager>();
@@ -222,12 +251,17 @@ public class PaintSceneSetup : EditorWindow
         uiMgr.undoButton      = undoBtn.GetComponent<Button>();
         uiMgr.completeButton  = completeBtn.GetComponent<Button>();
         uiMgr.backButton      = backBtn.GetComponent<Button>();
+        uiMgr.resetPaintingButton = resetPaintBtn.GetComponent<Button>();
         uiMgr.toolbarPanelRect = toolbarPanel.GetComponent<RectTransform>();
         uiMgr.fillToolBtn     = fillToolBtn.GetComponent<Button>();
         uiMgr.brushToolBtn    = brushToolBtn.GetComponent<Button>();
         uiMgr.brushSettingsPanel = sliderContainer;
         uiMgr.brushSizeSlider = brushSlider;
         uiMgr.paintController = paintController;
+        uiMgr.saveConfirmPanel = saveConfirmPanel;
+        uiMgr.confirmSaveBtn   = cSaveBtn.GetComponent<Button>();
+        uiMgr.confirmDontSaveBtn = cDontSaveBtn.GetComponent<Button>();
+        uiMgr.cancelExitBtn    = cCancelBtn.GetComponent<Button>();
         paintController.uiManager = uiMgr;
 
         // Wire "Reset View" button directly to CameraZoomPan
@@ -242,81 +276,101 @@ public class PaintSceneSetup : EditorWindow
 
     GameObject BuildRGBPickerPanel(Transform canvasParent, out RGBColorPicker picker)
     {
-        // Outer panel — centered, appears over everything
         var panel = MakePanel("RGBPickerPanel", canvasParent,
             new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-            new Vector2(320, 340), Vector2.zero);
-        panel.GetComponent<Image>().color = new Color(0.13f, 0.13f, 0.20f, 0.98f);
+            new Vector2(340, 560), Vector2.zero);
+        panel.GetComponent<Image>().color = new Color(0.18f, 0.18f, 0.22f, 0.98f);
 
         var canvas = panel.AddComponent<Canvas>();
         canvas.overrideSorting = true;
-        canvas.sortingOrder    = 50;   // always on top
+        canvas.sortingOrder    = 50;
         panel.AddComponent<GraphicRaycaster>();
 
-        // Title
-        AddText(panel.transform, "PickerTitle",
-            new Vector2(0, 0.87f), new Vector2(1, 1f),
-            "Chọn màu", 22, Color.white);
+        picker = panel.AddComponent<RGBColorPicker>();
 
-        // Preview swatch (top area)
+        AddText(panel.transform, "PickerTitle",
+            new Vector2(0, 0.94f), new Vector2(1, 1f),
+            "Color Picker", 22, Color.white);
+
         var swatchGO = new GameObject("PreviewSwatch");
         swatchGO.transform.SetParent(panel.transform, false);
         var swatchRT = swatchGO.AddComponent<RectTransform>();
-        swatchRT.anchorMin = new Vector2(0.35f, 0.73f);
-        swatchRT.anchorMax = new Vector2(0.65f, 0.87f);
+        swatchRT.anchorMin = new Vector2(0.7f, 0.88f);
+        swatchRT.anchorMax = new Vector2(0.9f, 0.95f);
         swatchRT.offsetMin = swatchRT.offsetMax = Vector2.zero;
         var swatchImg = swatchGO.AddComponent<Image>();
         swatchImg.color = Color.white;
+        picker.previewSwatch = swatchImg;
 
-        // Sliders R, G, B
-        Slider sliderR = BuildSlider(panel.transform, "SliderR",
-            new Vector2(0.06f, 0.60f), new Vector2(0.94f, 0.71f),
-            new Color(0.9f, 0.25f, 0.25f));
+        var hueRingGO = new GameObject("HueRing");
+        hueRingGO.transform.SetParent(panel.transform, false);
+        var ringRT = hueRingGO.AddComponent<RectTransform>();
+        ringRT.anchorMin = ringRT.anchorMax = new Vector2(0.5f, 1f);
+        ringRT.sizeDelta = new Vector2(256, 256);
+        ringRT.anchoredPosition = new Vector2(0, -170);
+        picker.hueRingImage = hueRingGO.AddComponent<RawImage>();
+        picker.hueRingImage.raycastTarget = true;
+        
+        var hkGO = MakePanel("HueKnob", hueRingGO.transform, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(16, 16), Vector2.zero);
+        hkGO.AddComponent<UnityEngine.UI.Outline>().effectColor = Color.black;
+        hkGO.GetComponent<Image>().raycastTarget = false;
+        picker.hueKnob = hkGO.GetComponent<RectTransform>();
 
-        Slider sliderG = BuildSlider(panel.transform, "SliderG",
-            new Vector2(0.06f, 0.46f), new Vector2(0.94f, 0.57f),
-            new Color(0.25f, 0.8f, 0.35f));
+        // No innerFit variable
+        var svSquareGO = new GameObject("SVSquare");
+        svSquareGO.transform.SetParent(hueRingGO.transform, false);
+        var svsqRT = svSquareGO.AddComponent<RectTransform>();
+        svsqRT.anchorMin = svsqRT.anchorMax = new Vector2(0.5f, 0.5f);
+        svsqRT.sizeDelta = new Vector2(128, 128);
+        svsqRT.anchoredPosition = Vector2.zero;
+        picker.svSquareImage = svSquareGO.AddComponent<RawImage>();
+        picker.svSquareImage.raycastTarget = true;
 
-        Slider sliderB = BuildSlider(panel.transform, "SliderB",
-            new Vector2(0.06f, 0.32f), new Vector2(0.94f, 0.43f),
-            new Color(0.25f, 0.55f, 0.95f));
+        var skGO = MakePanel("SVKnob", svSquareGO.transform, new Vector2(0, 0), new Vector2(0, 0), new Vector2(12, 12), Vector2.zero);
+        skGO.AddComponent<UnityEngine.UI.Outline>().effectColor = Color.black;
+        skGO.GetComponent<Image>().raycastTarget = false;
+        picker.svKnob = skGO.GetComponent<RectTransform>();
 
-        // Value labels (right-aligned beside each slider)
-        var lblR = AddText(panel.transform, "LabelR",
-            new Vector2(0, 0.62f), new Vector2(0.08f, 0.72f),
-            "R 255", 14, new Color(0.9f, 0.4f, 0.4f));
-        var lblG = AddText(panel.transform, "LabelG",
-            new Vector2(0, 0.48f), new Vector2(0.08f, 0.58f),
-            "G 255", 14, new Color(0.4f, 0.9f, 0.5f));
-        var lblB = AddText(panel.transform, "LabelB",
-            new Vector2(0, 0.34f), new Vector2(0.08f, 0.44f),
-            "B 255", 14, new Color(0.5f, 0.7f, 1f));
+        picker.sliderR = BuildSlider(panel.transform, "SliderR",
+            new Vector2(0.12f, 0.45f), new Vector2(0.9f, 0.50f), new Color(0.9f, 0.25f, 0.25f));
+        picker.sliderG = BuildSlider(panel.transform, "SliderG",
+            new Vector2(0.12f, 0.35f), new Vector2(0.9f, 0.40f), new Color(0.25f, 0.8f, 0.35f));
+        picker.sliderB = BuildSlider(panel.transform, "SliderB",
+            new Vector2(0.12f, 0.25f), new Vector2(0.9f, 0.30f), new Color(0.25f, 0.55f, 0.95f));
 
-        // Confirm button
+        picker.labelR = AddText(panel.transform, "LabelR",
+            new Vector2(0.02f, 0.45f), new Vector2(0.1f, 0.50f), "R", 14, new Color(0.9f, 0.4f, 0.4f));
+        picker.labelG = AddText(panel.transform, "LabelG",
+            new Vector2(0.02f, 0.35f), new Vector2(0.1f, 0.40f), "G", 14, new Color(0.4f, 0.9f, 0.5f));
+        picker.labelB = AddText(panel.transform, "LabelB",
+            new Vector2(0.02f, 0.25f), new Vector2(0.1f, 0.30f), "B", 14, new Color(0.5f, 0.7f, 1f));
+
+        var hexLabel = AddText(panel.transform, "HexLabel",
+            new Vector2(0.08f, 0.15f), new Vector2(0.4f, 0.20f), "Hexadecimal", 16, Color.white);
+        hexLabel.alignment = TextAnchor.MiddleLeft;
+
+        var hexInpGO = MakePanel("HexInput", panel.transform,
+            new Vector2(0.45f, 0.14f), new Vector2(0.9f, 0.22f), Vector2.zero, Vector2.zero);
+        hexInpGO.GetComponent<Image>().color = new Color(0.1f, 0.1f, 0.15f);
+        var hexTxt = AddText(hexInpGO.transform, "Text", Vector2.zero, Vector2.one, "FFFFFF", 16, Color.white);
+        var hexInp = hexInpGO.AddComponent<InputField>();
+        hexInp.textComponent = hexTxt;
+        picker.hexInput = hexInp;
+
         var confirmBtn = MakeTextButton("ConfirmButton", panel.transform,
             new Vector2(0.55f, 0), new Vector2(0.55f, 0),
-            new Vector2(0, 22f), new Vector2(120, 40f),
+            new Vector2(0, 30f), new Vector2(120, 42f),
             "✔ Chọn", new Color(0.22f, 0.70f, 0.40f), 17);
 
-        // Cancel button
         var cancelBtn = MakeTextButton("CancelButton", panel.transform,
             new Vector2(0.45f, 0), new Vector2(0.45f, 0),
-            new Vector2(0, 22f), new Vector2(100, 40f),
+            new Vector2(0, 30f), new Vector2(100, 42f),
             "✗ Hủy", new Color(0.55f, 0.20f, 0.20f), 17);
 
-        // Attach RGBColorPicker script
-        picker = panel.AddComponent<RGBColorPicker>();
-        picker.sliderR       = sliderR;
-        picker.sliderG       = sliderG;
-        picker.sliderB       = sliderB;
-        picker.labelR        = lblR;
-        picker.labelG        = lblG;
-        picker.labelB        = lblB;
-        picker.previewSwatch = swatchImg;
         picker.confirmButton = confirmBtn.GetComponent<Button>();
         picker.cancelButton  = cancelBtn.GetComponent<Button>();
 
-        panel.SetActive(false); // hidden by default
+        panel.SetActive(false);
         return panel;
     }
 

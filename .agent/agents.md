@@ -16,14 +16,16 @@ Dự án vận hành qua 3 Scene chính, cần được load thông qua `SceneMa
 ### 2. Các Script Quan Trọng (Core Scripts)
 
 #### Data & Quản lý Scene
-- **`GameData.cs`**: `static class` đóng vai trò là Data Bus truyền dữ liệu (Sprite, Total Regions, Tên Tranh) giữa `PictureSelect` và `PaintScene`. Tuyệt đối không xóa hay thay đổi cơ chế truyền static này nếu không có class quản lý State thay thế.
+- **`GameData.cs`**: `static class` đóng vai trò là Data Bus truyền dữ liệu (Sprite, Tên Tranh) giữa `PictureSelect` và `PaintScene`. Tuyệt đối không xóa hay thay đổi cơ chế truyền static này nếu không có class quản lý State thay thế.
+- **`SaveSystem.cs`**: Utility xử lý I/O lưu tiến trình tô màu (`Texture2D.EncodeToPNG()`). Lưu 2 file: `_save.png` (raw color layer cho PaintScene) và `_preview.png` (bản gộp viền đen cho Gallery thumbnail).
 - **`MainMenuManager.cs`**: Xử lý logic cơ bản của màn hình Menu (Bắt đầu, Thoát).
-- **`GameUIManager.cs`**: Quản lý UI On-screen của `PaintScene` (nút Trở về, Hủy bước, Hoàn thành, Màn hình Win). Điều khiển thu phóng thanh Toolbar bên trái khi chọn Brush/Fill.
+- **`GameUIManager.cs`**: Quản lý UI On-screen của `PaintScene` (nút Trở về, Hủy bước, Xóa màu/Reset, Hoàn thành, Màn hình Win, Popup Xác nhận Lưu). Điều khiển thu phóng thanh Toolbar bên trái khi chọn Brush/Fill.
 
 #### Picture Selection (Carousel)
-- **`PictureCarousel.cs`**: Xử lý logic vuốt/scroll ngang, tự động snap (hút) về bức tranh gần nhất.
+- **`PictureData.cs`**: `ScriptableObject` lưu trữ dữ liệu gốc của các bức tranh (Name, Outline Sprite).
+- **`PictureCarousel.cs`**: Xử lý logic cuộn ngang, tự động snap. Sinh lặp (Spawn) UI thẻ ảnh động từ mảng `PictureData[]`. Tích hợp load ảnh `_preview.png` từ `SaveSystem` hiển thị trạng thái đã tô.
 - **`CarouselDragProxy.cs`**: Truyền event Drag từ Viewport (bị block bởi RectMask2D) xuống cho `PictureCarousel`.
-- **`PictureCard.cs`**: Chứa data của từng bức tranh (Sprite, Name) và xử lý hiệu ứng Scale/Alpha khi tranh đó nằm ở giữa hay bị cuộn ra rìa.
+- **`PictureCard.cs`**: Component gắn trên thẻ UI để gán data visual.
 
 #### Paint Logic (Cốt lõi)
 - **`PaintController.cs`**: Xử lý toàn bộ logic Flood Fill và Brush (Cọ vẽ).
@@ -31,6 +33,7 @@ Dự án vận hành qua 3 Scene chính, cần được load thông qua `SceneMa
   - **Flood Fill**: Tô màu đặc (Solid) vào lớp dưới.
   - **Brush**: Vẽ tự do bằng cách click-drag. Sử dụng nội suy (Interpolation) để nối các điểm khi chuột di chuyển nhanh.
   - **Undo (Diff-based)**: Lưu cấu trúc `PixelDiff[] {idx, oldColor}` thay vì snapshot toàn bộ `Color32[]`. Tiết kiệm **10-50x** bộ nhớ cho mobile.
+  - **Save/Load State**: Sử dụng mảng pixels đọc/ghi qua png, có sinh lớp Composite (Gộp nền + viền) lúc `SaveCurrentProgress()` làm Thumbnail.
   - **Mobile input**: `Input.simulateMouseWithTouches = false` trên mobile. Toàn bộ touch painting xử lý trong `Update()` qua `HandleTouchPainting()` thay vì `OnMouseDown`. UI blocking dùng `EventSystem.RaycastAll()` (không phải `IsPointerOverGameObject`) vì đáng tin cậy hơn trên mobile.
 - **`RGBColorPicker.cs`**: Màn hình Popup cho phép người chơi pha màu RGB tùy chỉnh.
 - **`ColorPaletteUI.cs`**: Thanh màu Preset bên dưới, chứa nút `+` gọi `RGBColorPicker`.
@@ -50,8 +53,8 @@ Sử dụng các Tool Scripts nằm trong thư mục `Editor/` để tự độn
 Các script được phân loại trong `Assets/Scripts/`:
 - **`Controller/`**: `PaintController`, `CameraZoomPan`.
 - **`UI/`**: `GameUIManager`, `ColorPaletteUI`, `RGBColorPicker`, `MainMenuManager`.
-- **`Gallery/`**: `PictureCarousel`, `PictureCard`, `CarouselDragProxy`.
-- **`Data/`**: `GameData`.
+- **`Gallery/`**: `PictureCarousel`, `PictureCard`, `PictureData`, `CarouselDragProxy`.
+- **`Data/`**: `GameData`, `SaveSystem`.
 - **`Editor/`**: Các script setup scene.
 
 ---
@@ -86,8 +89,9 @@ Các script được phân loại trong `Assets/Scripts/`:
    - FloodFill trả về diff ngay trong quá trình fill. Brush lưu `strokeOriginals` (Dictionary pixel đầu tiên bị chạm) và commit 1 lần khi nhấc ngón tay.
    - `maxUndoSteps` là `public` field có thể chỉnh sử a trong Inspector. Mặc định là 20.
 
-7. **Không tự động Win:**
-   - Người chơi tô xong một vùng chỉ +1 vào Progress. Phải ấn nút **"Hoàn thành"** thủ công thì mới xác nhận thắng. (Cho phép tô lại, tô đè tùy thích).
+7. **Không tự động Win & Loại bỏ Progress Bar:**
+   - Game hiện chú trọng tô tự do (Sandbox). Bỏ hoàn toàn khái niệm biến đếm `totalRegions`.
+   - Người chơi tự ấn nút **"Hoàn thành"** thủ công thì mới Show Win Screen và tự động làm sạch file Save. Tùy ý tô đi tô lại bằng nút Reset (Xóa màu).
 
 ---
 *File này đóng vai trò hướng dẫn trực tiếp cho LLM ở các phiên làm việc tiếp theo.*

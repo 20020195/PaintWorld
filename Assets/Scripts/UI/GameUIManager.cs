@@ -16,6 +16,12 @@ public class GameUIManager : MonoBehaviour
     public Button undoButton;
     public Button completeButton;
     public Button backButton;
+    public Button resetPaintingButton;
+    [Header("Save Confirm Screen")]
+    public GameObject saveConfirmPanel;
+    public Button confirmSaveBtn;
+    public Button confirmDontSaveBtn;
+    public Button cancelExitBtn;
 
     public RectTransform toolbarPanelRect;
     public Button fillToolBtn;
@@ -42,6 +48,21 @@ public class GameUIManager : MonoBehaviour
 
         if (backButton != null)
             backButton.onClick.AddListener(OnBackClicked);
+
+        if (resetPaintingButton != null)
+            resetPaintingButton.onClick.AddListener(OnResetPaintingClicked);
+
+        if (saveConfirmPanel != null)
+            saveConfirmPanel.SetActive(false);
+
+        if (confirmSaveBtn != null)
+            confirmSaveBtn.onClick.AddListener(OnConfirmSave);
+
+        if (confirmDontSaveBtn != null)
+            confirmDontSaveBtn.onClick.AddListener(OnConfirmDontSave);
+
+        if (cancelExitBtn != null)
+            cancelExitBtn.onClick.AddListener(OnCancelExit);
 
         if (fillToolBtn != null)
             fillToolBtn.onClick.AddListener(() => SetTool(PaintTool.Fill));
@@ -87,9 +108,6 @@ public class GameUIManager : MonoBehaviour
         }
     }
 
-    // Called from PaintController — kept signature for compatibility
-    public void UpdateProgress(int painted, int total) { /* no-op, removed UI */ }
-
     public void ShowWinScreen()
     {
         if (winPanel != null)
@@ -130,6 +148,34 @@ public class GameUIManager : MonoBehaviour
 
     void OnBackClicked()
     {
+        if (saveConfirmPanel != null && paintController != null && !paintController.IsGameComplete) 
+        {
+            saveConfirmPanel.SetActive(true);
+        }
+        else
+        {
+            UnityEngine.SceneManagement.SceneManager.LoadScene("PictureSelect");
+        }
+    }
+
+    void OnConfirmSave()
+    {
+        if (paintController != null) paintController.SaveCurrentProgress();
         UnityEngine.SceneManagement.SceneManager.LoadScene("PictureSelect");
+    }
+
+    void OnConfirmDontSave()
+    {
+        UnityEngine.SceneManagement.SceneManager.LoadScene("PictureSelect");
+    }
+
+    void OnCancelExit()
+    {
+        if (saveConfirmPanel != null) saveConfirmPanel.SetActive(false);
+    }
+
+    void OnResetPaintingClicked()
+    {
+        if (paintController != null) paintController.ResetPainting();
     }
 }
