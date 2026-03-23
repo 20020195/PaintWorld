@@ -37,6 +37,8 @@ public class PaintController : MonoBehaviour
     private Texture2D paintTexture;
     private Color32[] pixels;          // current (mutable) pixel array
     private Color32[] originalPixels;  // backup of original, never modified
+    private int[] visitedArr;          // flood fill tracking
+    private int visitCounter = 0;
     private int texWidth, texHeight;
     private Color selectedColor = Color.blue;
     [Header("Drawing History")]
@@ -111,8 +113,7 @@ public class PaintController : MonoBehaviour
         for(int i = 0; i < currentColors.Length; i++)
         {
             Color32 orig = originalPixels[i];
-            float brightness = (orig.r + orig.g + orig.b) / (255f * 3f);
-            byte a = (byte)Mathf.Clamp(255 - (brightness * 255f), 0, 255);
+            byte a = GetOutlineAlpha(orig);
             
             Color32 cColor = currentColors[i];
             float alpha = a / 255f;
@@ -131,52 +132,102 @@ public class PaintController : MonoBehaviour
         Destroy(previewTex);
     }
 
+    private bool wasMultiTouchThisGesture = false;
+    private bool isTouchBlocked = false;
+
     void HandleTouchPainting()
     {
         if (IsGameComplete || selectedColor == default) return;
-        if (Input.touchCount == 0) return;
+        
+        if (Input.touchCount == 0)
+        {
+            wasMultiTouchThisGesture = false;
+            isTouchBlocked = false;
+            return;
+        }
+
+        // --- ABORT PAINTING IF MULTIPLE FINGERS (E.G. ZOOMING) ---
+        if (Input.touchCount > 1)
+        {
+            wasMultiTouchThisGesture = true;
+            if (isDraggingBrush)
+            {
+                isDraggingBrush = false;
+                IsBrushActive = false;
+                
+                // Revert any pixels modified by this accidental stroke
+                if (strokeOriginals.Count > 0)
+                {
+                    foreach (var kv in strokeOriginals)
+                        pixels[kv.Key] = kv.Value;
+                        
+                    strokeOriginals.Clear();
+                    paintTexture.SetPixels32(pixels);
+                    paintTexture.Apply();
+                }
+            }
+            return;
+        }
+
+        // Ignore remaining single finger movements if it was part of a pinch zoom gesture
+        if (wasMultiTouchThisGesture) return;
 
         Touch t = Input.GetTouch(0); // only track primary finger for painting
 
         if (t.phase == TouchPhase.Began)
         {
-            // UI check happens HERE, immediately at the start — before any paint logic
-            if (IsScreenPosOverUI(t.position)) return;
+            if (IsScreenPosOverUI(t.position))
+            {
+                isTouchBlocked = true;
+                return;
+            }
 
+            isTouchBlocked = false;
             if (!TryGetTexelFromScreen(t.position, out int px, out int py)) return;
 
-            if (currentTool == PaintTool.Fill)
-            {
-                TryPaint(px, py);
-            }
-            else if (currentTool == PaintTool.Brush)
+            if (currentTool == PaintTool.Brush)
             {
                 isDraggingBrush = true;
                 IsBrushActive = true;
                 strokeOriginals.Clear();
                 lastDragPos = new Vector2Int(px, py);
-                ApplyBrush(px, py);
+                if (ApplyBrush(px, py))
+                {
+                    paintTexture.SetPixels32(pixels);
+                    paintTexture.Apply();
+                }
             }
         }
         else if ((t.phase == TouchPhase.Moved || t.phase == TouchPhase.Stationary)
-                 && isDraggingBrush && currentTool == PaintTool.Brush)
+                 && isDraggingBrush && currentTool == PaintTool.Brush && !isTouchBlocked)
         {
             if (!TryGetTexelFromScreen(t.position, out int px, out int py)) return;
 
             float dist = Vector2.Distance(lastDragPos, new Vector2(px, py));
-            int steps = Mathf.Max(1, Mathf.FloorToInt(dist / (brushRadius * 0.5f)));
+            int steps = Mathf.Max(1, Mathf.FloorToInt(dist / Mathf.Max(1f, brushRadius * 0.5f)));
+            bool dirty = false;
             for (int i = 1; i <= steps; i++)
             {
                 float frac = (float)i / steps;
-                ApplyBrush(
+                if (ApplyBrush(
                     Mathf.RoundToInt(Mathf.Lerp(lastDragPos.x, px, frac)),
-                    Mathf.RoundToInt(Mathf.Lerp(lastDragPos.y, py, frac)));
+                    Mathf.RoundToInt(Mathf.Lerp(lastDragPos.y, py, frac))))
+                {
+                    dirty = true;
+                }
             }
+            
+            if (dirty)
+            {
+                paintTexture.SetPixels32(pixels);
+                paintTexture.Apply();
+            }
+            
             lastDragPos = new Vector2Int(px, py);
         }
         else if (t.phase == TouchPhase.Ended || t.phase == TouchPhase.Canceled)
         {
-            if (isDraggingBrush && currentTool == PaintTool.Brush)
+            if (currentTool == PaintTool.Brush && isDraggingBrush)
             {
                 isDraggingBrush = false;
                 IsBrushActive  = false;
@@ -188,6 +239,13 @@ public class PaintController : MonoBehaviour
                         pd[i++] = new PixelDiff { idx = kv.Key, oldColor = kv.Value };
                     PushUndo(pd);
                     strokeOriginals.Clear();
+                }
+            }
+            else if (currentTool == PaintTool.Fill && !isTouchBlocked && t.phase == TouchPhase.Ended)
+            {
+                if (TryGetTexelFromScreen(t.position, out int px, out int py))
+                {
+                    TryPaint(px, py);
                 }
             }
         }
@@ -204,6 +262,7 @@ public class PaintController : MonoBehaviour
             texWidth  = original.width;
             texHeight = original.height;
             originalPixels = original.GetPixels32();
+            visitedArr = new int[originalPixels.Length];
         }
 
         float ppu = spriteRenderer.sprite.pixelsPerUnit;
@@ -218,10 +277,8 @@ public class PaintController : MonoBehaviour
         for (int i = 0; i < originalPixels.Length; i++)
         {
             Color32 c = originalPixels[i];
-            float brightness = (c.r + c.g + c.b) / (255f * 3f);
+            byte a = GetOutlineAlpha(c);
             
-            // Map brightness to alpha: 0 brightness (black) = 255 alpha. 1 brightness (white) = 0 alpha.
-            byte a = (byte)Mathf.Clamp(255 - (brightness * 255f), 0, 255);
             // Use pure black (0,0,0) for the outline, using only alpha to blend. This completely eliminates white/gray fringing.
             outlinePixels[i] = new Color32(0, 0, 0, a);
         }
@@ -302,7 +359,11 @@ public class PaintController : MonoBehaviour
             IsBrushActive = true;
             strokeOriginals.Clear();
             lastDragPos = new Vector2Int(px, py);
-            ApplyBrush(px, py);
+            if (ApplyBrush(px, py))
+            {
+                paintTexture.SetPixels32(pixels);
+                paintTexture.Apply();
+            }
         }
     }
 
@@ -315,14 +376,21 @@ public class PaintController : MonoBehaviour
 
         // Interpolate between last point and this point to prevent gaps if mouse moves fast
         float distance = Vector2.Distance(lastDragPos, new Vector2(px, py));
-        int steps = Mathf.Max(1, Mathf.FloorToInt(distance / (brushRadius * 0.5f)));
+        int steps = Mathf.Max(1, Mathf.FloorToInt(distance / Mathf.Max(1f, brushRadius * 0.5f)));
+        bool dirty = false;
 
         for (int i = 1; i <= steps; i++)
         {
             float t = (float)i / steps;
             int lerpX = Mathf.RoundToInt(Mathf.Lerp(lastDragPos.x, px, t));
             int lerpY = Mathf.RoundToInt(Mathf.Lerp(lastDragPos.y, py, t));
-            ApplyBrush(lerpX, lerpY);
+            if (ApplyBrush(lerpX, lerpY)) dirty = true;
+        }
+
+        if (dirty)
+        {
+            paintTexture.SetPixels32(pixels);
+            paintTexture.Apply();
         }
 
         lastDragPos = new Vector2Int(px, py);
@@ -437,10 +505,12 @@ public class PaintController : MonoBehaviour
 
     void TryPaint(int startX, int startY)
     {
-        Color32 targetPixel = pixels[startY * texWidth + startX];
+        int targetIdx = startY * texWidth + startX;
+        Color32 targetPixel = pixels[targetIdx];
+        Color32 origPixel = originalPixels[targetIdx];
 
-        // Don't paint on outline pixels (dark pixels)
-        if (IsOutlinePixel(targetPixel)) return;
+        // Don't paint on outline pixels (dark pixels in the original sprite)
+        if (IsOutlinePixel(origPixel)) return;
 
         // Check if this region was previously white (unpainted)
         bool wasWhite = IsWhitePixel(targetPixel);
@@ -463,7 +533,7 @@ public class PaintController : MonoBehaviour
         }
     }
 
-    void ApplyBrush(int centerX, int centerY)
+    bool ApplyBrush(int centerX, int centerY)
     {
         bool painted = false;
         Color32 brushColor = new Color32(
@@ -484,7 +554,6 @@ public class PaintController : MonoBehaviour
                     if (tx >= 0 && tx < texWidth && ty >= 0 && ty < texHeight)
                     {
                         int idx = ty * texWidth + tx;
-                        if (IsOutlinePixel(originalPixels[idx])) continue;
 
                         // Record original color the first time we touch this pixel in this stroke
                         if (!strokeOriginals.ContainsKey(idx))
@@ -497,11 +566,7 @@ public class PaintController : MonoBehaviour
             }
         }
 
-        if (painted)
-        {
-            paintTexture.SetPixels32(pixels);
-            paintTexture.Apply();
-        }
+        return painted;
     }
 
     /// <summary>Reverts the picture to the previous state.</summary>
@@ -534,6 +599,7 @@ public class PaintController : MonoBehaviour
         Stack<Vector2Int> stack = new Stack<Vector2Int>();
         stack.Push(new Vector2Int(startX, startY));
 
+        visitCounter++;
         var diff = new List<PixelDiff>();
 
         while (stack.Count > 0)
@@ -545,13 +611,15 @@ public class PaintController : MonoBehaviour
             if (x < 0 || x >= texWidth || y < 0 || y >= texHeight) continue;
 
             int idx = y * texWidth + x;
+            
+            if (visitedArr[idx] == visitCounter) continue;
+            visitedArr[idx] = visitCounter;
+
             Color32 current = pixels[idx];
             Color32 orig = originalPixels[idx];
 
             if (IsOutlinePixel(orig))
             {
-                // Thả lỏng thêm 1 pixel vào trong outline để màu chui gọn xuống gầm viền.
-                // Hàm continue ngăn không cho stack lan toả qua bên kia viền.
                 if (current.r != fillColor.r || current.g != fillColor.g || current.b != fillColor.b)
                 {
                     diff.Add(new PixelDiff { idx = idx, oldColor = current });
@@ -560,11 +628,12 @@ public class PaintController : MonoBehaviour
                 continue;
             }
             if (ColorDistance(current, targetColor) > fillTolerance) continue;
-            if (current.r == fillColor.r && current.g == fillColor.g && current.b == fillColor.b) continue;
 
-            // Record the old value before overwriting
-            diff.Add(new PixelDiff { idx = idx, oldColor = current });
-            pixels[idx] = fillColor;
+            if (current.r != fillColor.r || current.g != fillColor.g || current.b != fillColor.b)
+            {
+                diff.Add(new PixelDiff { idx = idx, oldColor = current });
+                pixels[idx] = fillColor;
+            }
 
             stack.Push(new Vector2Int(x + 1, y));
             stack.Push(new Vector2Int(x - 1, y));
@@ -574,12 +643,62 @@ public class PaintController : MonoBehaviour
 
         if (diff.Count > 0)
         {
+            // --- DILATE 3 PIXELS TO HIDE GAPS UNDER OUTLINES ---
+            int expandPixels = 3;
+            List<int> currentFrontier = new List<int>(diff.Count);
+            List<int> nextFrontier = new List<int>();
+
+            for (int i = 0; i < diff.Count; i++) currentFrontier.Add(diff[i].idx);
+
+            for (int step = 0; step < expandPixels; step++)
+            {
+                nextFrontier.Clear();
+                for (int i = 0; i < currentFrontier.Count; i++)
+                {
+                    int idx = currentFrontier[i];
+                    int tx = idx % texWidth;
+                    int ty = idx / texWidth;
+
+                    if (tx < texWidth - 1) TryDilate(idx + 1, fillColor, nextFrontier, diff);
+                    if (tx > 0) TryDilate(idx - 1, fillColor, nextFrontier, diff);
+                    if (ty < texHeight - 1) TryDilate(idx + texWidth, fillColor, nextFrontier, diff);
+                    if (ty > 0) TryDilate(idx - texWidth, fillColor, nextFrontier, diff);
+                }
+                
+                // Swap lists
+                var temp = currentFrontier;
+                currentFrontier = nextFrontier;
+                nextFrontier = temp;
+            }
+
             paintTexture.SetPixels32(pixels);
             paintTexture.Apply();
             return diff.ToArray();
         }
 
         return null;
+    }
+
+    void TryDilate(int n, Color32 fillColor, List<int> nextFrontier, List<PixelDiff> diff)
+    {
+        if (visitedArr[n] != visitCounter)
+        {
+            visitedArr[n] = visitCounter;
+            Color32 orig = originalPixels[n];
+            float brightness = (orig.r + orig.g + orig.b) / (255f * 3f);
+            
+            // Allow bleed ONLY into dark outline/gradient. Block bleed into white paper.
+            // Brightness < 0.95f captures anti-aliasing pixels and thick black lines
+            if (brightness < 0.95f) 
+            {
+                if (pixels[n].r != fillColor.r || pixels[n].g != fillColor.g || pixels[n].b != fillColor.b)
+                {
+                    diff.Add(new PixelDiff { idx = n, oldColor = pixels[n] });
+                    pixels[n] = fillColor;
+                }
+                nextFrontier.Add(n);
+            }
+        }
     }
 
     bool IsOutlinePixel(Color32 c)
@@ -591,6 +710,19 @@ public class PaintController : MonoBehaviour
     bool IsWhitePixel(Color32 c)
     {
         return c.r > 200 && c.g > 200 && c.b > 200;
+    }
+
+    /// <summary>
+    /// Computes outline alpha using perceptual luminance and contrast crushing 
+    /// to eliminate JPEG/DXT compression noise in black/white areas.
+    /// </summary>
+    byte GetOutlineAlpha(Color32 c)
+    {
+        float lum = (c.r * 0.299f + c.g * 0.587f + c.b * 0.114f) / 255f;
+        
+        // Crush darks (<= 0.2) to pure opaque (255), and whites (>= 0.8) to pure transparent (0)
+        float remapped = Mathf.InverseLerp(0.2f, 0.8f, lum);
+        return (byte)Mathf.Clamp(255 - (remapped * 255f), 0, 255);
     }
 
     float ColorDistance(Color32 a, Color32 b)

@@ -177,6 +177,7 @@ MonoBehaviour:
   - {fileID: 11400000, guid: 8af3fc7842788e342a5567d3df5361e1, type: 2}
   - {fileID: 11400000, guid: 4c9478eb529b8574da974d73a877500a, type: 2}
   - {fileID: 11400000, guid: 00f10998aa1dbc448b1bbfdfddfa2a1e, type: 2}
+  - {fileID: 11400000, guid: 468e466c3c477a54f9ba7f3442d93bdc, type: 2}
   cardPrefab: {fileID: 0}
   cardSpacing: 520
   snapSpeed: 10
