@@ -3,8 +3,9 @@ using UnityEngine;
 using UnityEngine.UI;
 
 /// <summary>
-/// Creates and manages the color palette UI at the bottom of the screen.
+/// Creates and manages the color palette UI.
 /// Includes preset color swatches + a "+" custom color button that opens the RGB picker.
+/// Swatches are circular (Mask + Knob sprite). Selected state shown via a white dot child.
 /// </summary>
 public class ColorPaletteUI : MonoBehaviour
 {
@@ -28,14 +29,18 @@ public class ColorPaletteUI : MonoBehaviour
     };
 
     [Header("Style")]
-    public float buttonSize = 56f;
-    public float borderThickness = 4f;
+    public float buttonSize = 40f;
+    public Sprite circleSprite; // Assign via Inspector or PaintSceneSetup
 
     private List<Button> colorButtons = new List<Button>();
     private int selectedIndex = -1;
     private Color customColor = Color.white;
     private Button customColorButton;
     private Image customColorInner;
+
+    // Task 1.1 — new fields for SelectedDot tracking
+    private List<GameObject> selectedDots = new List<GameObject>();
+    private GameObject customSelectedDot;
 
     void Start()
     {
@@ -46,10 +51,12 @@ public class ColorPaletteUI : MonoBehaviour
             SelectColor(0);
     }
 
+    // Task 1.3 — updated CreateColorButtons
     void CreateColorButtons()
     {
         foreach (Transform child in transform) Destroy(child.gameObject);
         colorButtons.Clear();
+        selectedDots.Clear();
 
         // ── Preset color buttons ──────────────────────────────────
         for (int i = 0; i < colors.Count; i++)
@@ -63,6 +70,10 @@ public class ColorPaletteUI : MonoBehaviour
             Button btn = btnGO.GetComponent<Button>();
             btn.onClick.AddListener(() => SelectColor(idx));
             colorButtons.Add(btn);
+
+            // Track SelectedDot for each preset swatch
+            Transform dot = btnGO.transform.Find("SelectedDot");
+            selectedDots.Add(dot != null ? dot.gameObject : null);
         }
 
         // ── Custom color "+" button ───────────────────────────────
@@ -86,65 +97,97 @@ public class ColorPaletteUI : MonoBehaviour
         plusText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
 
         customColorButton = customGO.GetComponent<Button>();
-        customColorInner  = customGO.transform.Find("Inner")?.GetComponent<Image>();
+
+        // customColorInner is the root Image of the custom GO (Task 1.3)
+        customColorInner = customGO.GetComponent<Image>();
+
+        // Track SelectedDot for custom swatch (Task 1.3)
+        Transform customDot = customGO.transform.Find("SelectedDot");
+        customSelectedDot = customDot != null ? customDot.gameObject : null;
+
         customColorButton.onClick.AddListener(OnCustomColorClicked);
     }
 
-    /// <summary>Create a bordered swatch button (border + inner color square).</summary>
+    // Task 1.2 — rewritten CreateSwatchGO: circular swatch with SelectedDot child
     GameObject CreateSwatchGO(string name, Color color)
     {
+        Sprite knob = circleSprite != null
+            ? circleSprite
+            : Resources.GetBuiltinResource<Sprite>("UI/Skin/Knob.psd");
+
+        // Root GO: RectTransform + Image (swatch color, circle) + Mask + Button
         GameObject go = new GameObject(name);
         RectTransform rt = go.AddComponent<RectTransform>();
         rt.sizeDelta = new Vector2(buttonSize, buttonSize);
-        Image border = go.AddComponent<Image>();
-        border.color = Color.white;
-        Button btn = go.AddComponent<Button>();
-        btn.targetGraphic = border;
 
-        // Inner color
-        GameObject inner = new GameObject("Inner");
-        inner.transform.SetParent(go.transform, false);
-        RectTransform innerRT = inner.AddComponent<RectTransform>();
-        float inset = borderThickness;
-        innerRT.anchorMin = Vector2.zero;
-        innerRT.anchorMax = Vector2.one;
-        innerRT.offsetMin = new Vector2(inset, inset);
-        innerRT.offsetMax = new Vector2(-inset, -inset);
-        Image innerImg = inner.AddComponent<Image>();
-        innerImg.color = color;
+        Image img = go.AddComponent<Image>();
+        img.color = color;
+        img.sprite = knob;
+        img.type = Image.Type.Simple;
+
+        Mask mask = go.AddComponent<Mask>();
+        mask.showMaskGraphic = true;
+
+        LayoutElement le = go.AddComponent<LayoutElement>();
+        le.minWidth        = buttonSize;
+        le.minHeight       = buttonSize;
+        le.preferredWidth  = buttonSize;
+        le.preferredHeight = buttonSize;
+
+        Button btn = go.AddComponent<Button>();
+        btn.targetGraphic = img;
+
+        // Child "SelectedDot": white circle, 14×14, hidden by default
+        GameObject dot = new GameObject("SelectedDot");
+        dot.transform.SetParent(go.transform, false);
+        RectTransform dotRT = dot.AddComponent<RectTransform>();
+        dotRT.sizeDelta = new Vector2(14f, 14f);
+        dotRT.anchorMin = new Vector2(0.5f, 0.5f);
+        dotRT.anchorMax = new Vector2(0.5f, 0.5f);
+        dotRT.anchoredPosition = Vector2.zero;
+        Image dotImg = dot.AddComponent<Image>();
+        dotImg.color = Color.white;
+        dotImg.sprite = knob;
+        dotImg.type = Image.Type.Simple;
+        dot.SetActive(false);
 
         return go;
     }
 
+    // Task 1.4 — rewritten SelectColor: uses SelectedDot, no yellow border
     void SelectColor(int index)
     {
-        // Deselect old
-        if (selectedIndex >= 0 && selectedIndex < colorButtons.Count)
-            colorButtons[selectedIndex].GetComponent<Image>().color = Color.white;
+        // Hide old selected dot
+        if (selectedIndex >= 0 && selectedIndex < selectedDots.Count && selectedDots[selectedIndex] != null)
+            selectedDots[selectedIndex].SetActive(false);
 
-        // Deselect custom button border if needed
-        if (customColorButton != null)
-            customColorButton.GetComponent<Image>().color = Color.white;
+        // Hide custom dot
+        if (customSelectedDot != null)
+            customSelectedDot.SetActive(false);
 
         selectedIndex = index;
-        colorButtons[index].GetComponent<Image>().color = new Color(1f, 0.85f, 0.1f); // yellow border
+
+        // Show new selected dot
+        if (index >= 0 && index < selectedDots.Count && selectedDots[index] != null)
+            selectedDots[index].SetActive(true);
 
         if (paintController != null)
             paintController.SetSelectedColor(colors[index]);
     }
 
+    // Task 1.5 — rewritten SelectCustomColor: uses SelectedDot, no yellow border
     void SelectCustomColor(Color color)
     {
-        // Deselect all preset buttons
-        if (selectedIndex >= 0 && selectedIndex < colorButtons.Count)
-            colorButtons[selectedIndex].GetComponent<Image>().color = Color.white;
+        // Hide preset dot
+        if (selectedIndex >= 0 && selectedIndex < selectedDots.Count && selectedDots[selectedIndex] != null)
+            selectedDots[selectedIndex].SetActive(false);
         selectedIndex = -1;
 
-        // Highlight custom button
-        if (customColorButton != null)
-            customColorButton.GetComponent<Image>().color = new Color(1f, 0.85f, 0.1f);
+        // Show custom dot
+        if (customSelectedDot != null)
+            customSelectedDot.SetActive(true);
 
-        // Update inner swatch to show chosen color
+        // Update custom swatch color
         if (customColorInner != null)
             customColorInner.color = color;
 

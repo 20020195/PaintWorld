@@ -41,6 +41,7 @@ public class PictureCarousel : MonoBehaviour, IDragHandler, IEndDragHandler, IBe
 
     void Start()
     {
+        Application.targetFrameRate = 120;
         // 1. Spawn Cards Dynamically
         if (pictureDataList != null && pictureDataList.Length > 0)
         {
@@ -160,6 +161,10 @@ public class PictureCarousel : MonoBehaviour, IDragHandler, IEndDragHandler, IBe
 
     void Update()
     {
+#if UNITY_EDITOR
+        deltaTime += (Time.unscaledDeltaTime - deltaTime) * 0.1f;
+#endif
+
         if (!isDragging)
         {
             Vector2 pos = contentContainer.anchoredPosition;
@@ -258,4 +263,25 @@ public class PictureCarousel : MonoBehaviour, IDragHandler, IEndDragHandler, IBe
         SnapToIndex(currentIndex + 1);
         UpdateSelectionUI();
     }
+    
+#if UNITY_EDITOR
+    float deltaTime = 0.0f;
+
+    public void OnGUI()
+    {
+        int w = Screen.width, h = Screen.height;
+
+        GUIStyle style = new GUIStyle();
+        Rect rect = new Rect(w - 150, 10, 140, 40); // góc trên bên phải
+
+        style.alignment = TextAnchor.UpperRight;
+        style.fontSize = h * 2 / 50;
+        style.normal.textColor = Color.white;
+
+        float fps = 1.0f / deltaTime;
+        string text = string.Format("{0:0.} FPS", fps);
+
+        GUI.Label(rect, text, style);
+    }
+#endif
 }

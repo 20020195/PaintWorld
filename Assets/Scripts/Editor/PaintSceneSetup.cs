@@ -96,7 +96,7 @@ public class PaintSceneSetup : EditorWindow
 
         // ── Top Bar: Back | Title | "Hoàn thành" ────────────────
         var topBar = MakePanel("TopBar", canvasGO.transform,
-            new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, -54), Vector2.zero);
+            new Vector2(0, 1), new Vector2(1, 1), new Vector2(0, 50), new Vector2(0, -25));
         topBar.GetComponent<Image>().color = new Color(0.12f, 0.12f, 0.18f, 0.96f);
 
         // Back button (left)
@@ -129,20 +129,23 @@ public class PaintSceneSetup : EditorWindow
             new Vector2(-90f, 0), new Vector2(160f, 0),
             "✔ Hoàn thành", new Color(0.22f, 0.72f, 0.40f), 17);
 
-        // ── Palette Panel (bottom) ───────────────────────────────
+        // ── Palette Panel (right edge) ───────────────────────────
         var palettePanel = MakePanel("ColorPalettePanel", canvasGO.transform,
-            new Vector2(0, 0), new Vector2(1, 0), new Vector2(0, 100), Vector2.zero);
+            new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(72f, 0f), new Vector2(0f, 0f));
+        var palettePanelRT = palettePanel.GetComponent<RectTransform>();
+        palettePanelRT.pivot = new Vector2(1f, 0.5f);
         palettePanel.GetComponent<Image>().color = new Color(0.10f, 0.10f, 0.16f, 0.97f);
-        var hlg = palettePanel.AddComponent<HorizontalLayoutGroup>();
-        hlg.childAlignment       = TextAnchor.MiddleCenter;
-        hlg.spacing              = 8;
-        hlg.padding              = new RectOffset(14, 14, 12, 12);
-        hlg.childControlWidth    = false;
-        hlg.childControlHeight   = false;
-        hlg.childForceExpandWidth  = false;
-        hlg.childForceExpandHeight = false;
+        var vlg = palettePanel.AddComponent<VerticalLayoutGroup>();
+        vlg.childAlignment       = TextAnchor.UpperCenter;
+        vlg.spacing              = 8f;
+        vlg.padding              = new RectOffset(8, 8, 12, 12);
+        vlg.childForceExpandWidth  = false;
+        vlg.childForceExpandHeight = false;
+        var csf = palettePanel.AddComponent<ContentSizeFitter>();
+        csf.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
         var paletteUI = palettePanel.AddComponent<ColorPaletteUI>();
         paletteUI.paintController = paintController;
+        paletteUI.circleSprite = AssetDatabase.LoadAssetAtPath<Sprite>("Assets/Sprites/circle.png");
 
         // ── RGB Color Picker Panel (center) ──────────────────────
         var pickerPanel = BuildRGBPickerPanel(canvasGO.transform, out var rgbPicker);
@@ -197,25 +200,38 @@ public class PaintSceneSetup : EditorWindow
         // ── Win Panel ────────────────────────────────────────────
         var winPanel = MakePanel("WinPanel", canvasGO.transform,
             new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f),
-            new Vector2(380, 260), Vector2.zero);
+            new Vector2(520, 420), Vector2.zero);
         winPanel.GetComponent<Image>().color = new Color(0.10f, 0.12f, 0.20f, 0.97f);
         winPanel.SetActive(false);
 
-        // Win title
+        // Win title (top, centered)
         AddText(winPanel.transform, "WinTitle",
-            new Vector2(0, 0.52f), new Vector2(1, 0.95f),
-            "🎨 Hoàn thành!", 36, new Color(1f, 0.9f, 0.3f));
+            new Vector2(0.15f, 0.82f), new Vector2(0.85f, 0.97f),
+            "🎨 Hoàn thành!", 28, new Color(1f, 0.9f, 0.3f));
 
-        // Win subtitle
-        AddText(winPanel.transform, "WinSubtitle",
-            new Vector2(0, 0.33f), new Vector2(1, 0.54f),
-            "Bức tranh của bạn thật đẹp!", 18, new Color(0.75f, 0.75f, 0.75f));
+        // Preview image frame (center, large square)
+        var previewFrame = MakePanel("PreviewFrame", winPanel.transform,
+            new Vector2(0.15f, 0.22f), new Vector2(0.85f, 0.80f),
+            Vector2.zero, Vector2.zero);
+        previewFrame.GetComponent<Image>().color = new Color(0.06f, 0.07f, 0.12f, 1f);
 
-        // Play Again button (inside win panel)
+        // Inner preview image (slightly inset)
+        var previewImage = MakePanel("PreviewImage", previewFrame.transform,
+            new Vector2(0.05f, 0.05f), new Vector2(0.95f, 0.95f),
+            Vector2.zero, Vector2.zero);
+        previewImage.GetComponent<Image>().color = new Color(0.15f, 0.17f, 0.25f, 1f);
+
+        // "Tô lại" button (bottom-left)
         var playAgainBtn = MakeTextButton("PlayAgainButton", winPanel.transform,
             new Vector2(0.5f, 0), new Vector2(0.5f, 0),
-            new Vector2(0, 38f), new Vector2(200, 48f),
-            "🔄 Chơi lại", new Color(0.28f, 0.68f, 0.40f), 20);
+            new Vector2(-90f, 36f), new Vector2(160f, 48f),
+            "🔄 Tô lại", new Color(0.28f, 0.68f, 0.40f), 18);
+
+        // "Thoát" button (bottom-right)
+        var exitWinBtn = MakeTextButton("ExitButton", winPanel.transform,
+            new Vector2(0.5f, 0), new Vector2(0.5f, 0),
+            new Vector2(90f, 36f), new Vector2(160f, 48f),
+            "🚪 Thoát", new Color(0.55f, 0.25f, 0.25f), 18);
 
         // ── Save Confirm Panel ───────────────────────────────────
         var saveConfirmPanel = MakePanel("SaveConfirmPanel", canvasGO.transform,
@@ -267,6 +283,9 @@ public class PaintSceneSetup : EditorWindow
         // Wire "Reset View" button directly to CameraZoomPan
         var rvBtn = resetViewBtn.GetComponent<Button>();
         rvBtn.onClick.AddListener(zoomPan.ResetView);
+
+        // Wire "Thoát" in WinPanel to same action as BackButton
+        exitWinBtn.GetComponent<Button>().onClick.AddListener(() => uiMgr.backButton.onClick.Invoke());
 
         EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
         EditorUtility.DisplayDialog("Done!", "Scene created!\n\n1. Ctrl+S to save\n2. Press Play", "OK");
@@ -359,12 +378,12 @@ public class PaintSceneSetup : EditorWindow
 
         var confirmBtn = MakeTextButton("ConfirmButton", panel.transform,
             new Vector2(0.55f, 0), new Vector2(0.55f, 0),
-            new Vector2(0, 30f), new Vector2(120, 42f),
+            new Vector2(50f, 30f), new Vector2(120, 42f),
             "✔ Chọn", new Color(0.22f, 0.70f, 0.40f), 17);
 
         var cancelBtn = MakeTextButton("CancelButton", panel.transform,
             new Vector2(0.45f, 0), new Vector2(0.45f, 0),
-            new Vector2(0, 30f), new Vector2(100, 42f),
+            new Vector2(-50f, 30f), new Vector2(100, 42f),
             "✗ Hủy", new Color(0.55f, 0.20f, 0.20f), 17);
 
         picker.confirmButton = confirmBtn.GetComponent<Button>();

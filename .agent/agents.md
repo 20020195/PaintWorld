@@ -30,11 +30,11 @@ Dự án vận hành qua 3 Scene chính, cần được load thông qua `SceneMa
 #### Paint Logic (Cốt lõi)
 - **`PaintController.cs`**: Xử lý toàn bộ logic Flood Fill và Brush (Cọ vẽ).
   - **Cơ chế 2 Layer**: Lớp trên cùng (`SpriteRenderer` chính) là ảnh Outline đã xử lý trong suốt các vùng trắng. Lớp dưới cùng (`ColorLayer`) là `Texture2D` trắng để tô màu.
-  - **Flood Fill**: Tô màu đặc (Solid) vào lớp dưới.
-  - **Brush**: Vẽ tự do bằng cách click-drag. Sử dụng nội suy (Interpolation) để nối các điểm khi chuột di chuyển nhanh.
+  - **Flood Fill**: Tô màu đặc (Solid) vào lớp dưới. Sử dụng BFS (Breadth-First Search) khử đệ quy. Sau khi fill, thuật toán tự động thực hiện **Dilation (Thẩm thấu) 3px** ăn vào dưới lớp viền để triệt tiêu viền trắng (white halo). Kick-off fill chỉ xảy ra ở `TouchPhase.Ended` để tránh nhầm với thao tác Zoom.
+  - **Brush**: Vẽ tự do bằng cách click-drag. Sử dụng nội suy (Interpolation) để nối các điểm. Đã tối ưu hóa tính toán: chỉ gọi `Texture2D.Apply()` đúng 1 lần cuối frame thay vì gọi trong vòng lặp nội suy (giảm lag 10-20x cho cọ nhỏ). Cọ vẽ được phép tô đè lên vùng viền (bleed under stencil) để đảm bảo độ mịn.
   - **Undo (Diff-based)**: Lưu cấu trúc `PixelDiff[] {idx, oldColor}` thay vì snapshot toàn bộ `Color32[]`. Tiết kiệm **10-50x** bộ nhớ cho mobile.
-  - **Save/Load State**: Sử dụng mảng pixels đọc/ghi qua png, có sinh lớp Composite (Gộp nền + viền) lúc `SaveCurrentProgress()` làm Thumbnail.
-  - **Mobile input**: `Input.simulateMouseWithTouches = false` trên mobile. Toàn bộ touch painting xử lý trong `Update()` qua `HandleTouchPainting()` thay vì `OnMouseDown`. UI blocking dùng `EventSystem.RaycastAll()` (không phải `IsPointerOverGameObject`) vì đáng tin cậy hơn trên mobile.
+  - **Save/Load State**: Sử dụng mảng pixels đọc/ghi qua png, có sinh lớp Composite (Gộp nền + viền) lúc `SaveCurrentProgress()` làm Thumbnail. Tự động xử lý **Contrast Crushing** (`InverseLerp(0.2, 0.8)`) khi tách layer để loại bỏ nhiễu nén (Artifacts) từ định dạng JPEG/DXT.
+  - **Mobile input**: `Input.simulateMouseWithTouches = false`. Toàn bộ touch painting xử lý trong `Update()`. Có cơ chế **Multi-touch Protection**: Nếu phát hiện >1 ngón tay (Zoom/Pan), hệ thống lập tức hủy nét vẽ hiện tại và backtrack (`Revert`) lại các pixel vừa bị tô nhầm.
 - **`RGBColorPicker.cs`**: Màn hình Popup cho phép người chơi pha màu RGB tùy chỉnh.
 - **`ColorPaletteUI.cs`**: Thanh màu Preset bên dưới, chứa nút `+` gọi `RGBColorPicker`.
 - **`CameraZoomPan.cs`**: Điều khiển Camera Orthographic trong `PaintScene`.
@@ -71,18 +71,21 @@ Các script được phân loại trong `Assets/Scripts/`:
 2. **Unity UI Event System:**
    - Để tránh touch trên UI xâm nhập vào game world bín dưới do `simulateMouseWithTouches`, hãy dùng `EventSystem.RaycastAll()` tại `TouchPhase.Began` để phát hiện và blacklist touch ID đó.
 
-3. **Xử lý Texture (Texture Manipulation):**
-   - Import ảnh nét viền (Outlines) với thuộc tính `isReadable = true` và `Format = RGBA 32 bit` (trong meta properties).
+3. **Xử lý Texture & Outline Extraction:**
+   - Import ảnh nét viền (Outlines) với thuộc tính `isReadable = true`.
+   - **Outline Alpha Extraction**: Khi tách viền, sử dụng thuật toán Perceptual Luminance kết hợp Contrast Crushing (`InverseLerp(0.2f, 0.8f)`). Điều này ép các vùng nhiễu xám (Artifacts) về đúng đen đặc hoặc trắng trong suốt, giải quyết triệt để lỗi lốm đốm trên viền nén dxt.
    - KHÔNG dùng `Graphics.CopyTexture` giữa Texture Import và Runtime Texture do khác biệt byte nén. LUÔN dùng `Texture2D.GetPixels32()` và `Texture2D.SetPixels32()`.
 
 4. **Tối ưu hóa Thuật Toán Flood Fill:**
    - Dùng vòng lặp Stack (khử đệ quy) để tránh StackOverflow.
-   - Để tránh "răng cưa / nhem viền lốm đốm", phải kiểm tra biên và dung sai (tolerance) rộng `fillTolerance = 0.8`.
-   - **Hệ thống 2 Layer**: Đổ màu đặc (Solid Color) trực tiếp vào lớp `ColorLayer` nằm dưới. Không còn dùng Multiply Blending vì lớp Outline trên cùng đã làm nhiệm vụ che phủ và khử nhiễu.
+   - **Thẩm thấu (Dilation)**: Phải thực hiện BFS lan tỏa 3px từ biên vùng fill lấn vào vùng viền tối. Điều này che lấp các pixel Anti-aliasing của ảnh gốc, loại bỏ "viền trắng" bao quanh vùng màu.
+   - **Chống nhầm lẫn**: Chỉ thực hiện Fill ở `TouchPhase.Ended`. Sử dụng cờ `wasMultiTouchThisGesture` để chặn Fill nếu người chơi vừa thực hiện Zoom/Pan trước đó.
+   - **Hệ thống 2 Layer**: Đổ màu đặc (Solid Color) trực tiếp vào lớp `ColorLayer` nằm dưới. 🔍 Kiểm tra va chạm với `originalPixels` (ảnh gốc) thay vì `pixels` (ảnh đang tô) để cho phép tô đè màu khác lên mực đen mà không bị kẹt.
 
-5. **Quản lý Camera (Zoom & Pan):**
+5. **Quản lý Camera & Multi-touch:**
    - Orthographic Camera Scaling.
-   - Pan phải dùng **Local Coordinate Delta** (tính toán dựa trên `transform.InverseTransformPoint` và vị trí chuột cũ) để tránh hiện tượng rung lắc (jitter) khi camera di chuyển độc lập với vật thể.
+   - **Multi-touch Handling**: Trong `PaintController`, sử dụng cờ hiệu `wasMultiTouchThisGesture`. Nếu `Input.touchCount > 1`, lập tức tắt `isDraggingBrush` và trả lại màu cũ (`Revert`) cho các pixel bị chạm nhầm. Toàn bộ logic tô màu phải bị khóa cho đến khi người chơi nhấc hết các ngón tay lên.
+   - Pan phải dùng **Local Coordinate Delta** (tính toán dựa trên `transform.InverseTransformPoint` và vị trí chuột cũ) để tránh hiện tượng rung lắc (jitter).
 
 6. **Lịch sử Undo (Diff-based):**
    - Lưu cấu trúc `PixelDiff[] {int idx, Color32 oldColor}` thay vì snapshot toàn bộ `Color32[]`. Tiết kiệm 10-50x bộ nhớ cho mobile.
